@@ -1,0 +1,14 @@
+.cache
+*.o
+core
+bin/*
+compile_commands.json
+log.txt
+extra
+bin/main.dSYM
+.DS_Store
+lib
+dev
+.antigravitycli
+output_fuzz
+mismatches
