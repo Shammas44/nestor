@@ -1,0 +1,19 @@
+version: 2.0.0
+name: Multi Region Deployment
+on: { manual: {} }
+jobs:
+  validate_payload:
+    type: task
+    steps: []
+  check_tier:
+    type: task
+    depends_on: [validate_payload]
+    steps: []
+  deploy_standard:
+    type: task
+    depends_on: [check_tier]
+    steps: []
+  notify_success:
+    type: task
+    depends_on: [deploy_standard]
+    steps: []

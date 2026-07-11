@@ -8,7 +8,7 @@
   - [x] Bit-packed execution state stack (`bitstack.h`, `bitstack.c`)
   - [x] Stage 1 unit tests (`tests/test_stage1.c`)
 - [x] **Stage 2: Schema Parser & AST Construction (`jsonv` Bridge)**
-- [ ] **Stage 3: DAG Compiler & Kahn's Sorting**
+- [x] **Stage 3: DAG Compiler & Kahn's Sorting**
 - [ ] **Stage 4: JSONata Integration & Core Expression Evaluator**
 - [ ] **Stage 5: HTTP Native Step Runner**
 - [ ] **Stage 6: Control Flow Nodes (If, Switch, Loops)**

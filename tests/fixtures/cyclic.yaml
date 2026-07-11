@@ -1,0 +1,12 @@
+version: 2.0.0
+name: Cyclic Dependency Test
+on: { manual: {} }
+jobs:
+  job_a:
+    type: task
+    depends_on: [job_b]
+    steps: []
+  job_b:
+    type: task
+    depends_on: [job_a]
+    steps: []

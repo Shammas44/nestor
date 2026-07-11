@@ -4,6 +4,7 @@
 #include "arena.h"
 #include "stringview.h"
 #include "error_codes.h"
+#include "compiler.h"
 
 #endif 
 
