@@ -5,6 +5,7 @@
 #include "stringview.h"
 #include "error_codes.h"
 #include "compiler.h"
+#include "evaluator.h"
 
 #endif 
 

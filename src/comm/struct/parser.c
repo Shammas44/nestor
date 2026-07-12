@@ -3,30 +3,36 @@
 #include <string.h>
 #include <stdlib.h>
 
-static _Thread_local Arena *g_parser_arena = NULL;
-
-static void *jsonv_arena_malloc(size_t size) {
+static void *my_jsonv_arena_alloc(void *user_data, size_t size) {
   /*#region*/
-  return na_alloc(g_parser_arena, size);
+  return na_alloc((Arena *)user_data, size);
   /*#endregion*/
 }
 
-static void *jsonv_arena_calloc(size_t count, size_t size) {
+static void my_jsonv_arena_reset(void *user_data) {
   /*#region*/
-  size_t total = count * size;
-  void *ptr = na_alloc(g_parser_arena, total);
-  if (ptr) {
-    memset(ptr, 0, total);
-  }
-  return ptr;
+  arena_reset((Arena *)user_data);
   /*#endregion*/
 }
 
-static void jsonv_arena_free(void *ptr) {
+static void my_jsonv_arena_reset_to(void *user_data, size_t keep_size) {
   /*#region*/
-  (void)ptr;
+  arena_restore((Arena *)user_data, keep_size);
   /*#endregion*/
 }
+
+static void my_jsonv_arena_destroy(void *user_data) {
+  /*#region*/
+  (void)user_data;
+  /*#endregion*/
+}
+
+static const Jsonv_Arena_Ops my_jsonv_ops = {
+  .alloc = my_jsonv_arena_alloc,
+  .reset = my_jsonv_arena_reset,
+  .reset_to = my_jsonv_arena_reset_to,
+  .destroy = my_jsonv_arena_destroy
+};
 
 static bool is_digit(char c) {
   /*#region*/
@@ -78,14 +84,8 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
     return ERR_OOM;
   }
 
-  // Set up thread-local parser arena and jsonv custom allocators
-  g_parser_arena = arena;
-  g_jsonv_malloc = jsonv_arena_malloc;
-  g_jsonv_calloc = jsonv_arena_calloc;
-  g_jsonv_free = jsonv_arena_free;
-
-  // Create jsonv arena. Because we redirected malloc/calloc, this will allocate inside our Arena.
-  Jsonv_Arena *jsonv_arena = jsonv_arena_new(4096, 1024 * 1024, 12 * 1024);
+  // Create jsonv arena via our custom allocator operations mapping directly into our Arena
+  Jsonv_Arena *jsonv_arena = jsonv_arena_new_custom(&my_jsonv_ops, arena);
   if (!jsonv_arena) {
     return ERR_OOM;
   }

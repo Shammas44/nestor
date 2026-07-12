@@ -9,7 +9,7 @@
   - [x] Stage 1 unit tests (`tests/test_stage1.c`)
 - [x] **Stage 2: Schema Parser & AST Construction (`jsonv` Bridge)**
 - [x] **Stage 3: DAG Compiler & Kahn's Sorting**
-- [ ] **Stage 4: JSONata Integration & Core Expression Evaluator**
+- [x] **Stage 4: JSONata Integration & Core Expression Evaluator**
 - [ ] **Stage 5: HTTP Native Step Runner**
 - [ ] **Stage 6: Control Flow Nodes (If, Switch, Loops)**
 - [ ] **Stage 7: Concurrency Engine (In-Memory Fork & Join)**

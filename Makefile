@@ -69,12 +69,12 @@ TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test_%.o,$(TEST_SRC_FILES))
 
 # --- Libraries ---
 TEST_LIBS := criterion
-LINK_USER_SHARED_LIBS := /usr/local/lib/libjsonv.a $(patsubst %, -l%, $(USER_SHARED_LIBS))
+LINK_USER_SHARED_LIBS := $(patsubst %, -l%, $(USER_SHARED_LIBS))
 LINK_TEST_LIBS := $(patsubst %, -l%, $(TEST_LIBS))
 # Corrected find commands to search within the lib directory
 STATIC_LIB_BIN_PATHS := $(shell find lib -maxdepth 2 -type d -name "bin")
 STATIC_LIB_INCLUDE_PATHS := $(shell find lib -maxdepth 2 -type d -name "include")
-LDFLAGS := -L $(LIB_DIR) -L/usr/local/lib $(patsubst %, -L%, $(STATIC_LIB_BIN_PATHS))
+LDFLAGS := -L $(LIB_DIR) -L/usr/local/lib $(patsubst %, -L%, $(STATIC_LIB_BIN_PATHS)) -Wl,-rpath,/usr/local/lib
 LDLIBS := -l$(PROJECT_NAME) $(LINK_USER_SHARED_LIBS)
 
 ifneq ($(NESTOR_DIR),)
