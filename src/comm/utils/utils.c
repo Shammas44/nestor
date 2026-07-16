@@ -1,4 +1,6 @@
 #include "utils.h"
+#include "aho_corasick.h"
+#include <string.h>
 
 char *timestamp_to_string(size_t timestamp) {
   /*#region*/
@@ -23,7 +25,16 @@ void event_log(Keys key, const char *format, ...) {
   char *start = KEY(key);
   char *end = KEY(Reset);
   char *date = timestamp_to_string(t);
-  printf("[%s%s%s] %s%s%s\n", KEY(Magenta), date, KEY(Reset), start,
-         message_buffer, end);
+
+  ACNode *ac_root = get_global_ac_root();
+  if (ac_root) {
+    static char redacted_buffer[512];
+    redact_stream(ac_root, message_buffer, redacted_buffer, strlen(message_buffer));
+    printf("[%s%s%s] %s%s%s\n", KEY(Magenta), date, KEY(Reset), start,
+           redacted_buffer, end);
+  } else {
+    printf("[%s%s%s] %s%s%s\n", KEY(Magenta), date, KEY(Reset), start,
+           message_buffer, end);
+  }
   /*#endregion*/
 }

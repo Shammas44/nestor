@@ -167,10 +167,10 @@ uninstall:
 
 # --- Run Targets ---
 run: $(MAIN_APP_STATIC)
-	@$(MAIN_APP_STATIC)
+	@MallocNanoZone=0 $(MAIN_APP_STATIC) $(ARGS)
 
 run_d: $(MAIN_APP_DYNAMIC)
-	@$(MAIN_APP_DYNAMIC)
+	@MallocNanoZone=0 $(MAIN_APP_DYNAMIC)
 
 run_test: $(TEST_APP)
 	@MallocNanoZone=0 $(TEST_APP) || true

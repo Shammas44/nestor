@@ -21,17 +21,29 @@ typedef enum {
   NODE_WAIT_TIMER
 } NodeType;
 
+typedef enum {
+  STATE_PENDING = 0,
+  STATE_RUNNING = 1,
+  STATE_SUCCEEDED = 2,
+  STATE_FAILED = 3,
+  STATE_SKIPPED = 4,
+  STATE_SUSPENDED = 5
+} JobState;
+
 typedef struct StepNode StepNode;
 struct StepNode {
   StringView id;
   bool is_http; // true for http, false for plugin/uses
+  StringView timeout;
+  int retry_attempts;
+  StringView retry_backoff;
+  StringView retry_delay;
 
   struct {
     StringView method;
     StringView url;
     Jsonv_Value headers;
     Jsonv_Value body;
-    StringView timeout;
     StringView mtls_profile;
   } http;
 
@@ -130,6 +142,8 @@ typedef struct {
 
   JobNode *jobs_head; // Topologically sorted JobNodes list
   size_t job_count;
+  int max_concurrency;
+  char ipc_socket_path[256];
 } WorkflowAST;
 
 #endif

@@ -3,6 +3,36 @@
 
 void *na_alloc(Arena *arena, size_t size);
 
+static bool job_targets_id(JobNode *u, StringView id) {
+  /*#region*/
+  // Determine if a control-flow node u targets another node id.
+  if (u->type == NODE_IF) {
+    for (size_t i = 0; i < u->spec.binary_if.then_count; i++) {
+      if (sv_compare(u->spec.binary_if.then_branch[i], id) == 0) return true;
+    }
+    for (size_t i = 0; i < u->spec.binary_if.else_count; i++) {
+      if (sv_compare(u->spec.binary_if.else_branch[i], id) == 0) return true;
+    }
+  } else if (u->type == NODE_SWITCH) {
+    SwitchCase *sc = u->spec.multi_switch.cases;
+    while (sc) {
+      for (size_t i = 0; i < sc->then_count; i++) {
+        if (sv_compare(sc->then_branch[i], id) == 0) return true;
+      }
+      sc = sc->next;
+    }
+    for (size_t i = 0; i < u->spec.multi_switch.default_count; i++) {
+      if (sv_compare(u->spec.multi_switch.default_branch[i], id) == 0) return true;
+    }
+  } else if (u->type == NODE_FORK) {
+    for (size_t i = 0; i < u->spec.fork_node.branch_count; i++) {
+      if (sv_compare(u->spec.fork_node.branches[i], id) == 0) return true;
+    }
+  }
+  return false;
+  /*#endregion*/
+}
+
 int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
   /*#region*/
   if (!arena || !ast)
@@ -156,8 +186,8 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
 
           Jsonv_Value v_timeout;
           if (jsonv_obj_get(step_http.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
-            step->http.timeout.data = v_timeout.as.p;
-            step->http.timeout.length = jsonv_val_str_len(v_timeout);
+            step->timeout.data = v_timeout.as.p;
+            step->timeout.length = jsonv_val_str_len(v_timeout);
           }
           Jsonv_Value v_mtls;
           if (jsonv_obj_get(step_http.as.p, "mtls_profile", &v_mtls) && v_mtls.tag == JSONV_VAL_STRING) {
@@ -169,8 +199,34 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
           step->plugin.uses.data = step_uses.as.p;
           step->plugin.uses.length = jsonv_val_str_len(step_uses);
           jsonv_obj_get(step_val.as.p, "with", &step->plugin.with_args);
+          Jsonv_Value v_timeout;
+          if (jsonv_obj_get(step_val.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
+            step->timeout.data = v_timeout.as.p;
+            step->timeout.length = jsonv_val_str_len(v_timeout);
+          }
         } else {
           return ERR_MISSING_VAR;
+        }
+
+        // Parse step-level retries (if present)
+        step->retry_attempts = 0;
+        Jsonv_Value v_ret_att;
+        if (jsonv_obj_get(step_val.as.p, "retry_attempts", &v_ret_att)) {
+          if (v_ret_att.tag == JSONV_VAL_INT) {
+            step->retry_attempts = (int)v_ret_att.as.i;
+          } else if (v_ret_att.tag == JSONV_VAL_DOUBLE) {
+            step->retry_attempts = (int)v_ret_att.as.d;
+          }
+        }
+        Jsonv_Value v_ret_bk;
+        if (jsonv_obj_get(step_val.as.p, "retry_backoff", &v_ret_bk) && v_ret_bk.tag == JSONV_VAL_STRING) {
+          step->retry_backoff.data = v_ret_bk.as.p;
+          step->retry_backoff.length = jsonv_val_str_len(v_ret_bk);
+        }
+        Jsonv_Value v_ret_dl;
+        if (jsonv_obj_get(step_val.as.p, "retry_delay", &v_ret_dl) && v_ret_dl.tag == JSONV_VAL_STRING) {
+          step->retry_delay.data = v_ret_dl.as.p;
+          step->retry_delay.length = jsonv_val_str_len(v_ret_dl);
         }
 
         if (!job->spec.task.steps_head) {
@@ -307,8 +363,12 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
         job->spec.join_node.strategy.length = 3;
       }
       Jsonv_Value v_req;
-      if (jsonv_obj_get(job_spec_val.as.p, "n_required", &v_req) && v_req.tag == JSONV_VAL_INT) {
-        job->spec.join_node.n_required = v_req.as.i;
+      if (jsonv_obj_get(job_spec_val.as.p, "n_required", &v_req)) {
+        if (v_req.tag == JSONV_VAL_INT) {
+          job->spec.join_node.n_required = v_req.as.i;
+        } else if (v_req.tag == JSONV_VAL_DOUBLE) {
+          job->spec.join_node.n_required = (size_t)v_req.as.d;
+        }
       }
     } else if (job->type == NODE_LOOP) {
       Jsonv_Value v_loop_type;
@@ -327,8 +387,12 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
         job->spec.loop_node.items.length = jsonv_val_str_len(v_items);
       }
       Jsonv_Value v_max_iter;
-      if (jsonv_obj_get(job_spec_val.as.p, "max_iterations", &v_max_iter) && v_max_iter.tag == JSONV_VAL_INT) {
-        job->spec.loop_node.max_iterations = v_max_iter.as.i;
+      if (jsonv_obj_get(job_spec_val.as.p, "max_iterations", &v_max_iter)) {
+        if (v_max_iter.tag == JSONV_VAL_INT) {
+          job->spec.loop_node.max_iterations = v_max_iter.as.i;
+        } else if (v_max_iter.tag == JSONV_VAL_DOUBLE) {
+          job->spec.loop_node.max_iterations = (size_t)v_max_iter.as.d;
+        }
       }
 
       Jsonv_Value v_steps;
@@ -374,8 +438,8 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
 
             Jsonv_Value v_timeout;
             if (jsonv_obj_get(step_http.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
-              step->http.timeout.data = v_timeout.as.p;
-              step->http.timeout.length = jsonv_val_str_len(v_timeout);
+              step->timeout.data = v_timeout.as.p;
+              step->timeout.length = jsonv_val_str_len(v_timeout);
             }
             Jsonv_Value v_mtls;
             if (jsonv_obj_get(step_http.as.p, "mtls_profile", &v_mtls) && v_mtls.tag == JSONV_VAL_STRING) {
@@ -387,8 +451,34 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
             step->plugin.uses.data = step_uses.as.p;
             step->plugin.uses.length = jsonv_val_str_len(step_uses);
             jsonv_obj_get(step_val.as.p, "with", &step->plugin.with_args);
+            Jsonv_Value v_timeout;
+            if (jsonv_obj_get(step_val.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
+              step->timeout.data = v_timeout.as.p;
+              step->timeout.length = jsonv_val_str_len(v_timeout);
+            }
           } else {
             return ERR_MISSING_VAR;
+          }
+
+          // Parse step-level retries (if present)
+          step->retry_attempts = 0;
+          Jsonv_Value v_ret_att;
+          if (jsonv_obj_get(step_val.as.p, "retry_attempts", &v_ret_att)) {
+            if (v_ret_att.tag == JSONV_VAL_INT) {
+              step->retry_attempts = (int)v_ret_att.as.i;
+            } else if (v_ret_att.tag == JSONV_VAL_DOUBLE) {
+              step->retry_attempts = (int)v_ret_att.as.d;
+            }
+          }
+          Jsonv_Value v_ret_bk;
+          if (jsonv_obj_get(step_val.as.p, "retry_backoff", &v_ret_bk) && v_ret_bk.tag == JSONV_VAL_STRING) {
+            step->retry_backoff.data = v_ret_bk.as.p;
+            step->retry_backoff.length = jsonv_val_str_len(v_ret_bk);
+          }
+          Jsonv_Value v_ret_dl;
+          if (jsonv_obj_get(step_val.as.p, "retry_delay", &v_ret_dl) && v_ret_dl.tag == JSONV_VAL_STRING) {
+            step->retry_delay.data = v_ret_dl.as.p;
+            step->retry_delay.length = jsonv_val_str_len(v_ret_dl);
           }
 
           if (!job->spec.loop_node.steps_head) {
@@ -456,8 +546,8 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
 
             Jsonv_Value v_timeout;
             if (jsonv_obj_get(step_http.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
-              step->http.timeout.data = v_timeout.as.p;
-              step->http.timeout.length = jsonv_val_str_len(v_timeout);
+              step->timeout.data = v_timeout.as.p;
+              step->timeout.length = jsonv_val_str_len(v_timeout);
             }
             Jsonv_Value v_mtls;
             if (jsonv_obj_get(step_http.as.p, "mtls_profile", &v_mtls) && v_mtls.tag == JSONV_VAL_STRING) {
@@ -469,8 +559,34 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
             step->plugin.uses.data = step_uses.as.p;
             step->plugin.uses.length = jsonv_val_str_len(step_uses);
             jsonv_obj_get(step_val.as.p, "with", &step->plugin.with_args);
+            Jsonv_Value v_timeout;
+            if (jsonv_obj_get(step_val.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
+              step->timeout.data = v_timeout.as.p;
+              step->timeout.length = jsonv_val_str_len(v_timeout);
+            }
           } else {
             return ERR_MISSING_VAR;
+          }
+
+          // Parse step-level retries (if present)
+          step->retry_attempts = 0;
+          Jsonv_Value v_ret_att;
+          if (jsonv_obj_get(step_val.as.p, "retry_attempts", &v_ret_att)) {
+            if (v_ret_att.tag == JSONV_VAL_INT) {
+              step->retry_attempts = (int)v_ret_att.as.i;
+            } else if (v_ret_att.tag == JSONV_VAL_DOUBLE) {
+              step->retry_attempts = (int)v_ret_att.as.d;
+            }
+          }
+          Jsonv_Value v_ret_bk;
+          if (jsonv_obj_get(step_val.as.p, "retry_backoff", &v_ret_bk) && v_ret_bk.tag == JSONV_VAL_STRING) {
+            step->retry_backoff.data = v_ret_bk.as.p;
+            step->retry_backoff.length = jsonv_val_str_len(v_ret_bk);
+          }
+          Jsonv_Value v_ret_dl;
+          if (jsonv_obj_get(step_val.as.p, "retry_delay", &v_ret_dl) && v_ret_dl.tag == JSONV_VAL_STRING) {
+            step->retry_delay.data = v_ret_dl.as.p;
+            step->retry_delay.length = jsonv_val_str_len(v_ret_dl);
           }
 
           if (!job->spec.wait_signal.steps_head) {
@@ -491,6 +607,39 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
     }
 
     job_nodes[i] = job;
+  }
+
+  // 1.5. Inject implicit dependencies from control flow nodes (if, switch, fork).
+  // Target nodes must execute after their controlling node evaluates.
+  for (int i = 0; i < job_count; i++) {
+    JobNode *v = job_nodes[i];
+    size_t implicit_count = 0;
+    for (int j = 0; j < job_count; j++) {
+      if (i != j && job_targets_id(job_nodes[j], v->id)) {
+        implicit_count++;
+      }
+    }
+    if (implicit_count > 0) {
+      size_t total_count = v->dependency_count + implicit_count;
+      StringView *new_ids = na_alloc(arena, total_count * sizeof(StringView));
+      JobNode **new_nodes = na_alloc(arena, total_count * sizeof(JobNode *));
+      if (!new_ids || !new_nodes) return ERR_OOM;
+      if (v->dependency_count > 0) {
+        memcpy(new_ids, v->depends_on_ids, v->dependency_count * sizeof(StringView));
+        memcpy(new_nodes, v->depends_on_nodes, v->dependency_count * sizeof(JobNode *));
+      }
+      size_t idx = v->dependency_count;
+      for (int j = 0; j < job_count; j++) {
+        if (i != j && job_targets_id(job_nodes[j], v->id)) {
+          new_ids[idx] = job_nodes[j]->id;
+          new_nodes[idx] = NULL;
+          idx++;
+        }
+      }
+      v->depends_on_ids = new_ids;
+      v->depends_on_nodes = new_nodes;
+      v->dependency_count = total_count;
+    }
   }
 
   // 2. Resolve dependency nodes

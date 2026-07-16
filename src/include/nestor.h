@@ -6,6 +6,7 @@
 #include "error_codes.h"
 #include "compiler.h"
 #include "evaluator.h"
+#include "runner.h"
 
 #endif 
 

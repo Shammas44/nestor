@@ -149,6 +149,17 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
   out_ast->name.data = (const char *)v_name.as.p;
   out_ast->name.length = jsonv_val_str_len(v_name);
 
+  // Extract concurrency limit (if present)
+  out_ast->max_concurrency = 0; // default to unlimited
+  Jsonv_Value v_concurrency;
+  if (jsonv_obj_get(root_val.as.p, "concurrency", &v_concurrency)) {
+    if (v_concurrency.tag == JSONV_VAL_INT) {
+      out_ast->max_concurrency = (int)v_concurrency.as.i;
+    } else if (v_concurrency.tag == JSONV_VAL_DOUBLE) {
+      out_ast->max_concurrency = (int)v_concurrency.as.d;
+    }
+  }
+
   // Extract global env keys
   Jsonv_Value v_env;
   if (jsonv_obj_get(root_val.as.p, "env", &v_env) && v_env.tag == JSONV_VAL_OBJ) {
