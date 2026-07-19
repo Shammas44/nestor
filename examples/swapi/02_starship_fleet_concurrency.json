@@ -1,11 +1,16 @@
 {
   "version": "2.0.0",
   "name": "SWAPI Starship Fleet Concurrency",
-  "on": { "manual": {} },
+  "on": {
+    "manual": {}
+  },
   "jobs": {
     "fork_queries": {
       "type": "fork",
-      "branches": ["fetch_xwing", "fetch_falcon"]
+      "branches": [
+        "fetch_xwing",
+        "fetch_falcon"
+      ]
     },
     "fetch_xwing": {
       "type": "task",
@@ -34,18 +39,24 @@
     "join_fleet": {
       "type": "join",
       "strategy": "all",
-      "depends_on": ["fetch_xwing", "fetch_falcon"]
+      "depends_on": [
+        "fetch_xwing",
+        "fetch_falcon"
+      ]
     },
     "evaluate_fleet": {
       "type": "task",
-      "depends_on": ["join_fleet"],
+      "depends_on": [
+        "join_fleet"
+      ],
       "steps": [
         {
           "id": "log_fleet_stats",
           "uses": "./plugins/mock_plugin",
           "with": {
             "xwing_passengers": "${{ jobs.fetch_xwing.steps.get_xwing.body.passengers }}",
-            "falcon_passengers": "${{ jobs.fetch_falcon.steps.get_falcon.body.passengers }}"
+            "falcon_passengers": "${{ jobs.fetch_falcon.steps.get_falcon.body.passengers }}",
+            "total_passengers": "${{ $number(jobs.fetch_xwing.steps.get_xwing.body.passengers) + $number(jobs.fetch_falcon.steps.get_falcon.body.passengers) }}"
           }
         }
       ]
