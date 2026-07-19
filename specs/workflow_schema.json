@@ -1,0 +1,98 @@
+{
+  "type": "object",
+  "required": ["version", "name", "on", "jobs"],
+  "properties": {
+    "version": { "type": "string" },
+    "name": { "type": "string", "maxLength": 128 },
+    "on": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "concurrency": { "type": "integer" },
+    "env": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "jobs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["task", "if", "switch", "fork", "join", "loop", "wait_signal", "wait_timer"] },
+          "name": { "type": "string" },
+          "depends_on": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "http": {
+                  "type": "object",
+                  "required": ["method", "url"],
+                  "properties": {
+                    "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+                    "url": { "type": "string" },
+                    "headers": { "type": "object" },
+                    "body": { "type": "object" },
+                    "timeout": { "type": "string" },
+                    "mtls_profile": { "type": "string" }
+                  }
+                },
+                "uses": { "type": "string" },
+                "with": { "type": "object" },
+                "timeout": { "type": "string" },
+                "retry_attempts": { "type": "integer" },
+                "retry_backoff": { "type": "string" },
+                "retry_delay": { "type": "string" }
+              }
+            }
+          },
+          "condition": { "type": "string" },
+          "then": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "else": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "cases": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["condition", "then"],
+              "properties": {
+                "condition": { "type": "string" },
+                "then": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          },
+          "default": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "branches": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "strategy": { "type": "string" },
+          "n_required": { "type": "integer" },
+          "loop_type": { "type": "string", "enum": ["while", "for_each"] },
+          "max_iterations": { "type": "integer" },
+          "items": { "type": "string" },
+          "correlation_id": { "type": "string" },
+          "duration": { "type": "string" }
+        }
+      }
+    }
+  }
+}

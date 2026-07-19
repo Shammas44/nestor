@@ -78,6 +78,40 @@ static bool validate_semver(StringView sv) {
   /*#endregion*/
 }
 
+static char *read_file_to_arena(Arena *arena, const char *filepath, size_t *out_size) {
+  /*#region*/
+  FILE *f = fopen(filepath, "rb");
+  if (!f) return NULL;
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  if (size < 0) {
+    fclose(f);
+    return NULL;
+  }
+  char *buf = na_alloc(arena, size + 1);
+  if (!buf) {
+    fclose(f);
+    return NULL;
+  }
+  size_t read_bytes = fread(buf, 1, size, f);
+  buf[read_bytes] = '\0';
+  fclose(f);
+  if (out_size) *out_size = read_bytes;
+  return buf;
+  /*#endregion*/
+}
+
+static bool write_file_from_memory(const char *filepath, const void *data, size_t size) {
+  /*#region*/
+  FILE *f = fopen(filepath, "wb");
+  if (!f) return false;
+  size_t written = fwrite(data, 1, size, f);
+  fclose(f);
+  return written == size;
+  /*#endregion*/
+}
+
 static const char *workflow_schema_json = 
   "{\n"
   "  \"type\": \"object\",\n"
@@ -206,14 +240,54 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
     return ERR_OOM;
   }
 
-  Jsonv_Error schema_err = {0};
-  Jsonv_Schema *schema = jsonv_schema_compile(jsonv_arena, (const unsigned char *)workflow_schema_json, &config, &schema_err);
-  if (!schema) {
-    fprintf(stderr, "Failed to compile workflow schema: %s\n", schema_err.description);
-    if (schema_err.type == Jsonv_Mem_Failed || schema_err.type == Jsonv_Arena_Limit_Reached || schema_err.type == Jsonv_Arena_Overflow) {
-      return ERR_OOM;
+  // Resolve external schema paths
+  const char *schema_json_path = getenv("NESTOR_SCHEMA_PATH");
+  if (!schema_json_path) {
+    schema_json_path = "specs/workflow_schema.json";
+  }
+
+  const char *schema_bin_path = getenv("NESTOR_SCHEMA_BIN_PATH");
+  if (!schema_bin_path) {
+    schema_bin_path = "specs/workflow_schema.bin";
+  }
+
+  size_t json_size = 0;
+  char *json_data = read_file_to_arena(arena, schema_json_path, &json_size);
+  if (!json_data) {
+    // Fallback to hardcoded schema
+    json_data = (char *)workflow_schema_json;
+    json_size = strlen(workflow_schema_json);
+  }
+
+  size_t bin_size = 0;
+  char *bin_data = read_file_to_arena(arena, schema_bin_path, &bin_size);
+
+  bool cache_valid = false;
+  if (bin_data && bin_size > 0 && json_data && json_size > 0) {
+    cache_valid = jsonv_schema_compare(jsonv_arena, json_data, json_size, (const uint8_t *)bin_data, bin_size);
+  }
+
+  Jsonv_Schema *schema = NULL;
+  if (cache_valid) {
+    schema = na_alloc(arena, sizeof(Jsonv_Schema));
+    if (schema) {
+      schema->bytecode = (uint8_t *)bin_data;
+      schema->length = (uint32_t)bin_size;
     }
-    return ERR_MISSING_VAR;
+  }
+
+  if (!schema) {
+    Jsonv_Error schema_err = {0};
+    schema = jsonv_schema_compile(jsonv_arena, (const unsigned char *)json_data, &config, &schema_err);
+    if (!schema) {
+      fprintf(stderr, "Failed to compile workflow schema: %s\n", schema_err.description);
+      if (schema_err.type == Jsonv_Mem_Failed || schema_err.type == Jsonv_Arena_Limit_Reached || schema_err.type == Jsonv_Arena_Overflow) {
+        return ERR_OOM;
+      }
+      return ERR_MISSING_VAR;
+    }
+    // Write compiled bytecode to bin file for next usage
+    write_file_from_memory(schema_bin_path, schema->bytecode, schema->length);
   }
 
   // Parse YAML/JSON data
