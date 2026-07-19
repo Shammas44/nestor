@@ -1,0 +1,56 @@
+{
+  "version": "2.0.0",
+  "name": "Concurrency and Early Resuming Example",
+  "on": { "manual": {} },
+  "jobs": {
+    "fork_branches": {
+      "type": "fork",
+      "branches": ["fast_job", "slow_job"]
+    },
+    "fast_job": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "fast_http_step",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/delay/0.1"
+          }
+        }
+      ]
+    },
+    "slow_job": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "slow_http_step",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/delay/2.0"
+          }
+        }
+      ]
+    },
+    "join_barrier": {
+      "type": "join",
+      "strategy": "any",
+      "depends_on": ["fast_job", "slow_job"]
+    },
+    "downstream_task": {
+      "type": "task",
+      "depends_on": ["join_barrier"],
+      "steps": [
+        {
+          "id": "notify_downstream",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/notify",
+            "body": {
+              "message": "Downstream started because join_barrier (strategy: any) completed early!"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

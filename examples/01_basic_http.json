@@ -1,0 +1,28 @@
+{
+  "version": "2.0.0",
+  "name": "Basic HTTP Workflow",
+  "on": { "manual": {} },
+  "jobs": {
+    "http_job": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "provision_database",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/provision",
+            "headers": {
+              "Content-Type": "application/json",
+              "X-Requester": "${{ inputs.user_id }}"
+            },
+            "body": {
+              "service": "postgres",
+              "tier": "${{ inputs.tier }}"
+            },
+            "timeout": "5s"
+          }
+        }
+      ]
+    }
+  }
+}

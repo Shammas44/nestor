@@ -1,0 +1,92 @@
+{
+  "version": "2.0.0",
+  "name": "Conditional Execution Example",
+  "on": { "manual": {} },
+  "jobs": {
+    "check_tier": {
+      "type": "if",
+      "condition": "${{ inputs.tier = 'enterprise' }}",
+      "then": ["enterprise_deploy"],
+      "else": ["standard_deploy"]
+    },
+    "enterprise_deploy": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "provision_vip",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/provision",
+            "body": {
+              "vip": true,
+              "user": "${{ inputs.user_id }}"
+            }
+          }
+        }
+      ]
+    },
+    "standard_deploy": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "deploy_standard",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/deploy/standard"
+          }
+        }
+      ]
+    },
+    "region_switch": {
+      "type": "switch",
+      "depends_on": ["check_tier"],
+      "cases": [
+        {
+          "condition": "${{ inputs.region = 'eu' }}",
+          "then": ["deploy_eu"]
+        },
+        {
+          "condition": "${{ inputs.region = 'us' }}",
+          "then": ["deploy_us"]
+        }
+      ],
+      "default": ["deploy_fallback"]
+    },
+    "deploy_eu": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "eu_post",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/deploy/eu"
+          }
+        }
+      ]
+    },
+    "deploy_us": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "us_post",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/deploy/us"
+          }
+        }
+      ]
+    },
+    "deploy_fallback": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "fallback_post",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/deploy/standard"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "version": "2.0.0",
+  "name": "Complex Multi-Step JSONata Transformations",
+  "on": { "manual": {} },
+  "jobs": {
+    "processing_pipeline": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "fetch_resource",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/provision",
+            "headers": {
+              "Content-Type": "application/json"
+            },
+            "body": {
+              "requested_by": "${{ inputs.user_id }}",
+              "purpose": "jsonata_demo"
+            },
+            "timeout": "5s"
+          }
+        },
+        {
+          "id": "transform_and_log",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "param1": "${{ 'PROVISION_SUCCESS: ' & steps.fetch_resource.body.resource_id & ' [State: ' & steps.fetch_resource.body.status & '] - Triggered by ' & inputs.user_id & ' under env: ' & env.ENV_NAME }}"
+          }
+        }
+      ]
+    }
+  }
+}

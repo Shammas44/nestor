@@ -1,5 +1,7 @@
 .cache
 *.o
+*.log
+__pycache__
 core
 bin/*
 compile_commands.json

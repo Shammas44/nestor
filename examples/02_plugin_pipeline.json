@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "name": "Custom Plugin Integration",
+  "on": { "manual": {} },
+  "jobs": {
+    "plugin_job": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "run_integration",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "param1": "Host context env: ${{ env.ENV_NAME }} - user: ${{ inputs.user_id }}"
+          }
+        }
+      ]
+    }
+  }
+}

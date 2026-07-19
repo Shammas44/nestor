@@ -1,0 +1,37 @@
+{
+  "version": "2.0.0",
+  "name": "Loop Iteration Example",
+  "on": { "manual": {} },
+  "jobs": {
+    "while_loop": {
+      "type": "loop",
+      "loop_type": "while",
+      "condition": "${{ index < 3 }}",
+      "max_iterations": 5,
+      "steps": [
+        {
+          "id": "delay_step",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/delay/0.1"
+          }
+        }
+      ]
+    },
+    "for_each_loop": {
+      "type": "loop",
+      "loop_type": "for_each",
+      "items": "${{ ['eu', 'us'] }}",
+      "max_iterations": 5,
+      "steps": [
+        {
+          "id": "deploy_region",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/deploy/${{ item }}"
+          }
+        }
+      ]
+    }
+  }
+}

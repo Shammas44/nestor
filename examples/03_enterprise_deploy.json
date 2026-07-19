@@ -1,0 +1,90 @@
+{
+  "version": "2.0.0",
+  "name": "Enterprise Deployment Orchestrator",
+  "on": { "manual": {} },
+  "jobs": {
+    "validate_payload": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "verify_request",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/validate",
+            "body": {
+              "tier": "${{ inputs.tier }}"
+            }
+          }
+        }
+      ]
+    },
+    "check_tier": {
+      "type": "if",
+      "depends_on": ["validate_payload"],
+      "condition": "${{ inputs.tier = 'enterprise' }}",
+      "then": ["split_deployments"],
+      "else": ["deploy_standard"]
+    },
+    "deploy_standard": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "std_deploy",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/deploy/standard"
+          }
+        }
+      ]
+    },
+    "split_deployments": {
+      "type": "fork",
+      "branches": ["deploy_us", "deploy_eu"]
+    },
+    "deploy_us": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "us_step",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/deploy/us"
+          }
+        }
+      ]
+    },
+    "deploy_eu": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "eu_step",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/deploy/eu"
+          }
+        }
+      ]
+    },
+    "sync_deployments": {
+      "type": "join",
+      "depends_on": ["deploy_us", "deploy_eu"],
+      "strategy": "all"
+    },
+    "notify_success": {
+      "type": "task",
+      "depends_on": ["sync_deployments", "deploy_standard"],
+      "steps": [
+        {
+          "id": "slack_notify",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/notify",
+            "body": {
+              "status": "Deployment fully completed successfully."
+            }
+          }
+        }
+      ]
+    }
+  }
+}
