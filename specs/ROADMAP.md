@@ -25,10 +25,11 @@ graph TD
         S5 --> S6[Stage 6: Control Flow Nodes]
         S6 --> S7[Stage 7: In-Memory Fork/Join]
         S7 --> S8[Stage 8: Redaction Engine]
+        S8 --> SDK[Stage 8.5: C & Python Developer SDKs]
     end
 
     subgraph Phase 2: Long-Lived Workflows
-        S8 --> S9[Stage 9: Event Persistence DB]
+        SDK --> S9[Stage 9: Event Persistence DB]
         S9 --> S10[Stage 10: Async State Suspension]
         S10 --> S11[Stage 11: Daemon API Server]
     end
@@ -36,6 +37,7 @@ graph TD
     style S1 fill:#1a5f7a,stroke:#333,stroke-width:2px,color:#fff
     style S2 fill:#1a5f7a,stroke:#333,stroke-width:2px,color:#fff
     style S8 fill:#1a5f7a,stroke:#333,stroke-width:2px,color:#fff
+    style SDK fill:#1a5f7a,stroke:#333,stroke-width:2px,color:#fff
     style S9 fill:#c45a00,stroke:#333,stroke-width:2px,color:#fff
     style S11 fill:#f15a24,stroke:#333,stroke-width:2px,color:#fff
 ```
@@ -290,6 +292,32 @@ Register two secrets: `"SECRET_TOKEN"` and `"PA$$WORD"`. Write log messages:
 `"Sending request with Authorization: Bearer SECRET_TOKEN to access database using PA$$WORD."`
 Verify the output streams as:
 `"Sending request with Authorization: Bearer *** to access database using ***."`
+
+---
+
+### Stage 8.5: Developer SDKs for C and Python Plugins
+
+#### Objective
+Provide standardized C and Python SDK libraries (`nestor_plugin.h` and `nestor_plugin.py`) to simplify plugin development, abstraction of IPC socket queries, environment parsing, and result serialization.
+
+#### Files & Structures
+- `plugins/sdk/c/include/nestor_plugin.h` & `plugins/sdk/c/src/nestor_plugin.c`
+- `plugins/sdk/python/nestor_plugin.py`
+
+#### Detailed Steps
+1. **C SDK (`nestor_plugin.h`):**
+   - Implement `np_get_input_json()`: Reads the parsed input parameters from the path provided in the `NESTOR_PLUGIN_INPUT` environment variable.
+   - Implement `np_get_env()`: Reads the context environment from `NESTOR_ENV`.
+   - Implement `np_success(const char *json_body)` and `np_error(int code, const char *err_msg)`: Output formatting functions that stream structured results to stdout.
+   - Implement a dynamic context queries wrapper API (over the UNIX socket specified in `NESTOR_SOCKET`).
+2. **Python SDK (`nestor_plugin.py`):**
+   - Provide a class `NestorPlugin`.
+   - Implement `get_input()` and `get_env()` helper methods to read and parse environment variable JSON streams.
+   - Implement `success(data)` and `error(code, message)` helper methods to write outcome payloads back to the host process.
+   - Implement dynamic socket communication wrappers.
+
+#### E2E Verification
+Write test scripts using both C and Python SDKs. Verify they compile and run, correctly processing inputs and environment variables, communicating dynamically with the engine over Unix sockets, and exiting with appropriate stdout outputs.
 
 ---
 
