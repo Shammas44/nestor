@@ -78,6 +78,106 @@ static bool validate_semver(StringView sv) {
   /*#endregion*/
 }
 
+static const char *workflow_schema_json = 
+  "{\n"
+  "  \"type\": \"object\",\n"
+  "  \"required\": [\"version\", \"name\", \"on\", \"jobs\"],\n"
+  "  \"properties\": {\n"
+  "    \"version\": { \"type\": \"string\" },\n"
+  "    \"name\": { \"type\": \"string\", \"maxLength\": 128 },\n"
+  "    \"on\": {\n"
+  "      \"type\": \"object\",\n"
+  "      \"minProperties\": 1\n"
+  "    },\n"
+  "    \"concurrency\": { \"type\": \"integer\" },\n"
+  "    \"env\": {\n"
+  "      \"type\": \"object\",\n"
+  "      \"additionalProperties\": { \"type\": \"string\" }\n"
+  "    },\n"
+  "    \"jobs\": {\n"
+  "      \"type\": \"object\",\n"
+  "      \"additionalProperties\": {\n"
+  "        \"type\": \"object\",\n"
+  "        \"properties\": {\n"
+  "          \"type\": { \"type\": \"string\", \"enum\": [\"task\", \"if\", \"switch\", \"fork\", \"join\", \"loop\", \"wait_signal\", \"wait_timer\"] },\n"
+  "          \"name\": { \"type\": \"string\" },\n"
+  "          \"depends_on\": {\n"
+  "            \"anyOf\": [\n"
+  "              { \"type\": \"string\" },\n"
+  "              { \"type\": \"array\", \"items\": { \"type\": \"string\" } }\n"
+  "            ]\n"
+  "          },\n"
+  "          \"steps\": {\n"
+  "            \"type\": \"array\",\n"
+  "            \"items\": {\n"
+  "              \"type\": \"object\",\n"
+  "              \"properties\": {\n"
+  "                \"id\": { \"type\": \"string\" },\n"
+  "                \"http\": {\n"
+  "                  \"type\": \"object\",\n"
+  "                  \"required\": [\"method\", \"url\"],\n"
+  "                  \"properties\": {\n"
+  "                    \"method\": { \"type\": \"string\", \"enum\": [\"GET\", \"POST\", \"PUT\", \"PATCH\", \"DELETE\"] },\n"
+  "                    \"url\": { \"type\": \"string\" },\n"
+  "                    \"headers\": { \"type\": \"object\" },\n"
+  "                    \"body\": { \"type\": \"object\" },\n"
+  "                    \"timeout\": { \"type\": \"string\" },\n"
+  "                    \"mtls_profile\": { \"type\": \"string\" }\n"
+  "                  }\n"
+  "                },\n"
+  "                \"uses\": { \"type\": \"string\" },\n"
+  "                \"with\": { \"type\": \"object\" },\n"
+  "                \"timeout\": { \"type\": \"string\" },\n"
+  "                \"retry_attempts\": { \"type\": \"integer\" },\n"
+  "                \"retry_backoff\": { \"type\": \"string\" },\n"
+  "                \"retry_delay\": { \"type\": \"string\" }\n"
+  "              }\n"
+  "            }\n"
+  "          },\n"
+  "          \"condition\": { \"type\": \"string\" },\n"
+  "          \"then\": {\n"
+  "            \"type\": \"array\",\n"
+  "            \"items\": { \"type\": \"string\" }\n"
+  "          },\n"
+  "          \"else\": {\n"
+  "            \"type\": \"array\",\n"
+  "            \"items\": { \"type\": \"string\" }\n"
+  "          },\n"
+  "          \"cases\": {\n"
+  "            \"type\": \"array\",\n"
+  "            \"items\": {\n"
+  "              \"type\": \"object\",\n"
+  "              \"required\": [\"condition\", \"then\"],\n"
+  "              \"properties\": {\n"
+  "                \"condition\": { \"type\": \"string\" },\n"
+  "                \"then\": {\n"
+  "                  \"type\": \"array\",\n"
+  "                  \"items\": { \"type\": \"string\" }\n"
+  "                }\n"
+  "              }\n"
+  "            }\n"
+  "          },\n"
+  "          \"default\": {\n"
+  "            \"type\": \"array\",\n"
+  "            \"items\": { \"type\": \"string\" }\n"
+  "          },\n"
+  "          \"branches\": {\n"
+  "            \"type\": \"array\",\n"
+  "            \"items\": { \"type\": \"string\" }\n"
+  "          },\n"
+  "          \"strategy\": { \"type\": \"string\" },\n"
+  "          \"n_required\": { \"type\": \"integer\" },\n"
+  "          \"loop_type\": { \"type\": \"string\", \"enum\": [\"while\", \"for_each\"] },\n"
+  "          \"max_iterations\": { \"type\": \"integer\" },\n"
+  "          \"items\": { \"type\": \"string\" },\n"
+  "          \"correlation_id\": { \"type\": \"string\" },\n"
+  "          \"duration\": { \"type\": \"string\" }\n"
+  "        }\n"
+  "      }\n"
+  "    }\n"
+  "  }\n"
+  "}\n";
+
 int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, WorkflowAST *out_ast) {
   /*#region*/
   if (!arena || !buffer || !out_ast) {
@@ -92,10 +192,28 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
 
   // Create jsonv parser context
   Jsonv_Config config = {0};
+  config.default_block_size = 4096;
+  config.max_limit = 16 * 1024 * 1024;
+  config.max_depth = 128;
+  config.max_values = 10000;
+  config.max_objects = 5000;
+  config.max_array = 5000;
+  config.max_string_bytes = 4 * 1024 * 1024;
+
   Jsonv_Arena_Error err_code = 0;
   Jsonv_Context *ctx = jsonv_ctx_new(jsonv_arena, &config, &err_code);
   if (!ctx) {
     return ERR_OOM;
+  }
+
+  Jsonv_Error schema_err = {0};
+  Jsonv_Schema *schema = jsonv_schema_compile(jsonv_arena, (const unsigned char *)workflow_schema_json, &config, &schema_err);
+  if (!schema) {
+    fprintf(stderr, "Failed to compile workflow schema: %s\n", schema_err.description);
+    if (schema_err.type == Jsonv_Mem_Failed || schema_err.type == Jsonv_Arena_Limit_Reached || schema_err.type == Jsonv_Arena_Overflow) {
+      return ERR_OOM;
+    }
+    return ERR_MISSING_VAR;
   }
 
   // Parse YAML/JSON data
@@ -106,6 +224,15 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
   }
 
   if (!success) {
+    return ERR_MISSING_VAR;
+  }
+
+  // Validate workflow against JSON schema
+  if (!jsonv_ctx_validate(ctx, schema)) {
+    const Jsonv_Error *val_err = jsonv_ctx_get_error(ctx);
+    if (val_err) {
+      fprintf(stderr, "Validation Error: %s at path %s\n", val_err->description, val_err->path ? val_err->path : "");
+    }
     return ERR_MISSING_VAR;
   }
 
