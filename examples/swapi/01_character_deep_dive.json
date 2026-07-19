@@ -31,7 +31,7 @@
     "evaluate_planet": {
       "type": "if",
       "depends_on": ["fetch_homeworld"],
-      "condition": "${{ jobs.fetch_homeworld.steps.get_planet.body.population > 100000 }}",
+      "condition": "${{ $number(jobs.fetch_homeworld.steps.get_planet.body.population) > 100000 }}",
       "then": ["heavily_populated"],
       "else": ["sparsely_populated"]
     },
