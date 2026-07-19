@@ -16,3 +16,5 @@ output_fuzz
 mismatches
 *.bin
 tags
+.venv
+mock_server.log
