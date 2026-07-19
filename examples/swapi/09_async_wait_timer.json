@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "name": "SWAPI Async Wait Timer",
+  "on": { "manual": {} },
+  "jobs": {
+    "query_ship": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "get_starship",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/starships/9/"
+          }
+        }
+      ]
+    },
+    "fueling_sequence": {
+      "type": "wait_timer",
+      "depends_on": ["query_ship"],
+      "duration": "1s"
+    },
+    "launch_check": {
+      "type": "task",
+      "depends_on": ["fueling_sequence"],
+      "steps": [
+        {
+          "id": "confirm_launch",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "starship": "${{ jobs.query_ship.steps.get_starship.body.name }}",
+            "status": "ready"
+          }
+        }
+      ]
+    }
+  }
+}

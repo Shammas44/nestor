@@ -76,8 +76,9 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
   CURL *curl = curl_easy_init();
   if (!curl) return ERR_HTTP_TRANSPORT;
 
-  StringView resolved_url;
-  resolve_string(arena, step->http.url, jsonv_arena, context_val, &resolved_url);
+  StringView resolved_url = {NULL, 0};
+  int32_t status = resolve_string(arena, step->http.url, jsonv_arena, context_val, &resolved_url);
+  if (status != ERR_SUCCESS) return status;
   char *url_cstr = sv_to_cstring(arena, resolved_url);
 
   curl_easy_setopt(curl, CURLOPT_URL, url_cstr);
@@ -159,8 +160,9 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
 
   long timeout_ms = 30000;
   if (step->timeout.length > 0) {
-    StringView resolved_timeout;
-    resolve_string(arena, step->timeout, jsonv_arena, context_val, &resolved_timeout);
+    StringView resolved_timeout = {NULL, 0};
+    int32_t status = resolve_string(arena, step->timeout, jsonv_arena, context_val, &resolved_timeout);
+    if (status != ERR_SUCCESS) return status;
     timeout_ms = parse_duration_ms(resolved_timeout);
   }
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms);
@@ -308,8 +310,9 @@ void transport_mock_add_response(const char *url, const char *method, long statu
 static int32_t mock_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, StepNode *step, ResponseBuffer *resp_buf, void **handle_out) {
   /*#region*/
   (void)t;
-  StringView resolved_url;
-  resolve_string(arena, step->http.url, jsonv_arena, context_val, &resolved_url);
+  StringView resolved_url = {NULL, 0};
+  int32_t status = resolve_string(arena, step->http.url, jsonv_arena, context_val, &resolved_url);
+  if (status != ERR_SUCCESS) return status;
   char *url_cstr = sv_to_cstring(arena, resolved_url);
 
   MockResponseEntry *curr = mock_responses_head;

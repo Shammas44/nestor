@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0",
+  "name": "SWAPI Film Character Association",
+  "on": { "manual": {} },
+  "jobs": {
+    "fetch_film": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "get_film",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/films/1/"
+          }
+        }
+      ]
+    },
+    "verify_characters": {
+      "type": "loop",
+      "depends_on": ["fetch_film"],
+      "loop_type": "for_each",
+      "items": "${{ inputs.character_ids }}",
+      "max_iterations": 3,
+      "steps": [
+        {
+          "id": "get_character",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/people/${{ item }}/"
+          }
+        },
+        {
+          "id": "log_association",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "film_title": "${{ steps.fetch_film.body.title }}",
+            "character_name": "${{ steps.get_character.body.name }}"
+          }
+        }
+      ]
+    }
+  }
+}

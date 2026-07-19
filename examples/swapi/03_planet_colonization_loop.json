@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "name": "SWAPI Planet Colonization Loop",
+  "on": { "manual": {} },
+  "jobs": {
+    "planet_evaluation": {
+      "type": "loop",
+      "loop_type": "for_each",
+      "items": "${{ inputs.planet_ids }}",
+      "max_iterations": 5,
+      "steps": [
+        {
+          "id": "query_planet",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/planets/${{ item }}/"
+          }
+        },
+        {
+          "id": "check_hospitable",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "planet_name": "${{ steps.query_planet.body.name }}",
+            "climate": "${{ steps.query_planet.body.climate }}",
+            "gravity": "${{ steps.query_planet.body.gravity }}"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "name": "SWAPI Conditional Species Branching",
+  "on": { "manual": {} },
+  "jobs": {
+    "fetch_character": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "get_char",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/people/2/"
+          }
+        }
+      ]
+    },
+    "species_switch": {
+      "type": "switch",
+      "depends_on": ["fetch_character"],
+      "cases": [
+        {
+          "condition": "${{ steps.fetch_character.body.height > 170 }}",
+          "then": ["tall_character_branch"]
+        },
+        {
+          "condition": "${{ steps.fetch_character.body.height <= 170 }}",
+          "then": ["short_character_branch"]
+        }
+      ],
+      "default": ["fallback_branch"]
+    },
+    "tall_character_branch": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "log_tall",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "type": "tall"
+          }
+        }
+      ]
+    },
+    "short_character_branch": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "log_short",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "type": "short"
+          }
+        }
+      ]
+    },
+    "fallback_branch": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "log_fallback",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "type": "unknown"
+          }
+        }
+      ]
+    }
+  }
+}

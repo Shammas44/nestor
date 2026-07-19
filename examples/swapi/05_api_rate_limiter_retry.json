@@ -1,0 +1,23 @@
+{
+  "version": "2.0.0",
+  "name": "SWAPI API Rate Limiter Retry",
+  "on": { "manual": {} },
+  "jobs": {
+    "fetch_starship_resiliently": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "get_starship",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/starships/12/",
+            "timeout": "5s"
+          },
+          "retry_attempts": 3,
+          "retry_backoff": "exponential",
+          "retry_delay": "100ms"
+        }
+      ]
+    }
+  }
+}

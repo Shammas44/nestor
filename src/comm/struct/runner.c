@@ -900,6 +900,18 @@ static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
     return ERR_SUCCESS;
   }
 
+  if (aj->job->type == NODE_WAIT_TIMER) {
+    aj->job->execution_state = STATE_SUCCEEDED;
+    char *job_id_cstr = allocate_jsonv_string(arena, aj->job->id.data, aj->job->id.length);
+    Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+    Jsonv_Value jobs_val_obj;
+    char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+    if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+      jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+    }
+    return ERR_SUCCESS;
+  }
+
   Arena *effective_arena = aj->loop_arena ? aj->loop_arena : arena;
 
   while (aj->curr_step != NULL && aj->easy_handle == NULL && aj->plugin_exec.child_pid == 0) {
@@ -934,6 +946,18 @@ static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
     } else {
       if (aj->job->execution_state != STATE_FAILED) {
         aj->job->execution_state = STATE_SUCCEEDED;
+
+        // Add job steps outcomes to the global "jobs" object in the context
+        char *job_id_cstr = allocate_jsonv_string(arena, aj->job->id.data, aj->job->id.length);
+        Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+        char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+        jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, aj->steps_state_obj);
+
+        Jsonv_Value jobs_val_obj;
+        char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+        if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+          jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+        }
       }
     }
   }
@@ -961,6 +985,10 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
   set_global_ac_root(ac_root);
 
   Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast->jsonv_ctx);
+
+  Jsonv_Obj *jobs_root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+  jsonv_obj_set(jsonv_arena, context_val->as.p, k_jobs, jsonv_val_obj(jobs_root_obj));
 
   ast->ipc_socket_path[0] = '\0';
   int ipc_listen_fd = -1;
@@ -1120,7 +1148,7 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
             break;
           }
         }
-        if (job->type == NODE_TASK || job->type == NODE_LOOP) {
+        if (job->type == NODE_TASK || job->type == NODE_LOOP || job->type == NODE_WAIT_TIMER) {
           ActiveJob *aj = na_alloc(arena, sizeof(ActiveJob));
           if (!aj) {
             ret_val = ERR_OOM;
@@ -1135,7 +1163,7 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
             jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
             aj->curr_step = job->spec.task.steps_head;
             aj->is_loop = false;
-          } else {
+          } else if (job->type == NODE_LOOP) {
             aj->is_loop = true;
             aj->max_iterations = job->spec.loop_node.max_iterations;
             if (aj->max_iterations == 0) {
@@ -1147,6 +1175,22 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
               ret_val = status;
               goto cleanup;
             }
+          } else if (job->type == NODE_WAIT_TIMER) {
+            aj->is_loop = false;
+            StringView resolved_dur;
+            resolve_string(arena, job->spec.wait_timer.duration, jsonv_arena, *context_val, &resolved_dur);
+            long duration_ms = parse_duration_ms(resolved_dur);
+            struct timeval now;
+            gettimeofday(&now, NULL);
+            long sec = duration_ms / 1000;
+            long usec = (duration_ms % 1000) * 1000;
+            aj->next_retry_time.tv_sec = now.tv_sec + sec;
+            aj->next_retry_time.tv_usec = now.tv_usec + usec;
+            if (aj->next_retry_time.tv_usec >= 1000000) {
+              aj->next_retry_time.tv_sec++;
+              aj->next_retry_time.tv_usec -= 1000000;
+            }
+            aj->is_waiting_retry = true;
           }
 
           job->execution_state = STATE_RUNNING;

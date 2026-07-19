@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "name": "SWAPI Coordinated Multistage Orchestration",
+  "on": { "manual": {} },
+  "jobs": {
+    "start_stage": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "initialize_pipeline",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/films/1/"
+          }
+        }
+      ]
+    },
+    "split_analysis": {
+      "type": "fork",
+      "depends_on": ["start_stage"],
+      "branches": ["planet_loop_job", "character_lookup_job"]
+    },
+    "planet_loop_job": {
+      "type": "loop",
+      "loop_type": "for_each",
+      "items": "${{ inputs.planet_ids }}",
+      "max_iterations": 2,
+      "steps": [
+        {
+          "id": "get_planet_details",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/planets/${{ item }}/"
+          }
+        }
+      ]
+    },
+    "character_lookup_job": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "get_luke_details",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/people/1/"
+          }
+        }
+      ]
+    },
+    "join_stages": {
+      "type": "join",
+      "strategy": "all",
+      "depends_on": ["planet_loop_job", "character_lookup_job"]
+    },
+    "final_report": {
+      "type": "task",
+      "depends_on": ["join_stages"],
+      "steps": [
+        {
+          "id": "compile_results",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "film_title": "${{ jobs.start_stage.steps.initialize_pipeline.body.title }}",
+            "character_name": "${{ jobs.character_lookup_job.steps.get_luke_details.body.name }}"
+          }
+        }
+      ]
+    }
+  }
+}

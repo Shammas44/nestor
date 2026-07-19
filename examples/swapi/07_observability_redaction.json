@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "name": "SWAPI Observability Redaction",
+  "on": { "manual": {} },
+  "jobs": {
+    "redact_luke": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "get_sensitive_character",
+          "http": {
+            "method": "GET",
+            "url": "https://swapi.dev/api/people/1/",
+            "headers": {
+              "X-API-Key": "${{ secrets.SWAPI_KEY }}"
+            }
+          }
+        },
+        {
+          "id": "log_sensitive_output",
+          "uses": "./plugins/mock_plugin",
+          "with": {
+            "token": "${{ secrets.SWAPI_KEY }}",
+            "character_name": "${{ steps.get_sensitive_character.body.name }}"
+          }
+        }
+      ]
+    }
+  }
+}
