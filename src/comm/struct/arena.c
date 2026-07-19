@@ -31,10 +31,10 @@ void *na_alloc(Arena *arena, size_t size) {
   if (!arena)
     return NULL;
 
-  // We align the size to 8 bytes. Since the starting address of each chunk's
-  // buffer is aligned by malloc (which is at least 8-byte aligned, usually 16),
-  // keeping the offset 8-byte aligned guarantees all returned pointers are 8-byte aligned.
-  size_t aligned_size = ALIGN_UP(size, 8);
+  // We align the size to 16 bytes. Since the starting address of each chunk's
+  // buffer is aligned by malloc (which is at least 16-byte aligned on 64-bit macOS),
+  // keeping the offset 16-byte aligned guarantees all returned pointers are 16-byte aligned.
+  size_t aligned_size = ALIGN_UP(size, 16);
 
   // Try to fit the allocation in the current chunk if one is active.
   if (arena->current) {

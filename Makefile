@@ -39,7 +39,7 @@ else
 endif
 
 # --- Build Options ---
-BASE_CFLAGS := -Wall -Wextra -Werror -fvisibility=hidden
+BASE_CFLAGS := -Wall -Wextra -Werror -fvisibility=hidden -include src/include/jsonv_compat.h
 ifeq ($(OPTION), prod)
   CFLAGS := $(BASE_CFLAGS) -O2
 else ifeq ($(OPTION), dev)

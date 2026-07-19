@@ -44,4 +44,7 @@ char *timestamp_to_string(size_t timestamp);
 
 void event_log(Keys key, const char *format, ...);
 
+#include <jsonv/jsonv.h>
+Jsonv_Obj *create_empty_jsonv_object(Jsonv_Arena *jsonv_arena);
+
 #endif
