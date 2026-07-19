@@ -11,7 +11,6 @@
 static void init() {
   /*#region*/
   test_init();
-  system("mkdir -p ./plugins && gcc -O2 tests/fixtures/mock_plugin.c -o ./plugins/mock_plugin");
 
   // Register mock HTTP responses matching endpoints hit in example files
   transport_mock_add_response("127.0.0.1:8080/api/provision", "POST", 200, "{\"success\": true, \"resource_id\": \"res-123\", \"status\": \"active\"}");
@@ -35,7 +34,6 @@ static void init() {
 static void fini() {
   /*#region*/
   test_fini();
-  unlink("./plugins/mock_plugin");
   /*#endregion*/
 }
 
@@ -79,11 +77,41 @@ static char *allocate_jsonv_string(Arena *arena, const char *str) {
   /*#endregion*/
 }
 
-static void run_example_test(const char *filepath) {
+static Jsonv_Value get_step_outcome(Arena *arena, Jsonv_Obj *root_obj, const char *job_id, const char *step_id) {
   /*#region*/
-  Arena *arena = arena_create(1024 * 1024);
-  cr_assert_not_null(arena);
+  (void)arena;
+  Jsonv_Value jobs_val;
+  if (jsonv_obj_get(root_obj, "jobs", &jobs_val) && jobs_val.tag == JSONV_VAL_OBJ) {
+    Jsonv_Value job_val;
+    if (jsonv_obj_get(jobs_val.as.p, job_id, &job_val) && job_val.tag == JSONV_VAL_OBJ) {
+      Jsonv_Value steps_val;
+      if (jsonv_obj_get(job_val.as.p, "steps", &steps_val) && steps_val.tag == JSONV_VAL_OBJ) {
+        Jsonv_Value step_val;
+        if (jsonv_obj_get(steps_val.as.p, step_id, &step_val)) {
+          return step_val;
+        }
+      }
+    }
+  }
+  return jsonv_val_undefined();
+  /*#endregion*/
+}
 
+static int64_t get_step_status_code(Arena *arena, Jsonv_Obj *root_obj, const char *job_id, const char *step_id) {
+  /*#region*/
+  Jsonv_Value outcome = get_step_outcome(arena, root_obj, job_id, step_id);
+  if (outcome.tag == JSONV_VAL_OBJ) {
+    Jsonv_Value status_code_val;
+    if (jsonv_obj_get(outcome.as.p, "status_code", &status_code_val) && status_code_val.tag == JSONV_VAL_INT) {
+      return status_code_val.as.i;
+    }
+  }
+  return -1;
+  /*#endregion*/
+}
+
+static Jsonv_Value run_example_test(Arena *arena, const char *filepath) {
+  /*#region*/
   // Redirect stdin to the file
   FILE *f = freopen(filepath, "r", stdin);
   cr_assert_not_null(f);
@@ -147,115 +175,187 @@ static void run_example_test(const char *filepath) {
   cr_assert_eq(run_status, ERR_SUCCESS, "run_status was %d", (int)run_status);
 
   mock_trans->ops->destroy(mock_trans);
-  arena_destroy(arena);
+  return context_val;
   /*#endregion*/
 }
 
 TIMED_TEST(examples, basic_http, init, fini)
 /*#region*/
-  run_example_test("examples/01_basic_http.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/01_basic_http.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "http_job", "provision_database");
+  cr_assert_eq(status, 200);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, plugin_pipeline, init, fini)
 /*#region*/
-  run_example_test("examples/02_plugin_pipeline.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/02_plugin_pipeline.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "plugin_job", "run_integration");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, enterprise_deploy, init, fini)
 /*#region*/
-  run_example_test("examples/03_enterprise_deploy.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/03_enterprise_deploy.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "notify_success", "slack_notify");
+  cr_assert_eq(status, 200);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, multistep_jsonata, init, fini)
 /*#region*/
-  run_example_test("examples/04_multistep_jsonata.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/04_multistep_jsonata.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "processing_pipeline", "transform_and_log");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, concurrency_resume, init, fini)
 /*#region*/
-  run_example_test("examples/05_concurrency_resume.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/05_concurrency_resume.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "downstream_task", "notify_downstream");
+  cr_assert_eq(status, 200);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, secrets_redaction, init, fini)
 /*#region*/
-  run_example_test("examples/06_secrets_redaction.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/06_secrets_redaction.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "redact_job", "deploy_step");
+  cr_assert_eq(status, 200);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, conditionals, init, fini)
 /*#region*/
-  run_example_test("examples/07_conditionals.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/07_conditionals.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "deploy_eu", "eu_post");
+  cr_assert_eq(status, 200);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, loops, init, fini)
 /*#region*/
-  run_example_test("examples/08_loops.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/08_loops.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "for_each_loop", "deploy_region");
+  cr_assert_eq(status, 200);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 // SWAPI Examples
 TIMED_TEST(examples, swapi_01_character_deep_dive, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/01_character_deep_dive.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/01_character_deep_dive.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "heavily_populated", "log_heavy");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, swapi_02_starship_fleet_concurrency, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/02_starship_fleet_concurrency.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/02_starship_fleet_concurrency.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "evaluate_fleet", "log_fleet_stats");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, swapi_03_planet_colonization_loop, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/03_planet_colonization_loop.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/03_planet_colonization_loop.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "planet_evaluation", "check_hospitable");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, swapi_04_film_character_association, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/04_film_character_association.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/04_film_character_association.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "verify_characters", "log_association");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, swapi_05_api_rate_limiter_retry, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/05_api_rate_limiter_retry.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/05_api_rate_limiter_retry.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "fetch_starship_resiliently", "get_starship");
+  cr_assert_eq(status, 200);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, swapi_06_secret_authorized_proxy, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/06_secret_authorized_proxy.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/06_secret_authorized_proxy.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "query_proxy", "get_proxied_character");
+  cr_assert_eq(status, 200);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, swapi_07_observability_redaction, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/07_observability_redaction.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/07_observability_redaction.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "redact_luke", "log_sensitive_output");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, swapi_08_conditional_species_branching, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/08_conditional_species_branching.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/08_conditional_species_branching.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "short_character_branch", "log_short");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, swapi_09_async_wait_timer, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/09_async_wait_timer.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/09_async_wait_timer.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "launch_check", "confirm_launch");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
 
 TIMED_TEST(examples, swapi_10_coordinated_multistage_orchestration, init, fini)
 /*#region*/
-  run_example_test("examples/swapi/10_coordinated_multistage_orchestration.json");
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/swapi/10_coordinated_multistage_orchestration.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "final_report", "compile_results");
+  cr_assert_eq(status, 0);
+  arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST

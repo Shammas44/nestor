@@ -141,15 +141,19 @@ $(MAIN_APP_STATIC): $(OBJ_DIR)/main.o $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_USER_SHARED_LIBS)
 
 # --- Test Executables ---
-test_unit: static $(TEST_APP_UNIT)
+test_unit: static plugins/mock_plugin $(TEST_APP_UNIT)
 $(TEST_APP_UNIT): $(UNIT_TEST_OBJS) $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 	@echo "[CC] Linking $@"
 	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_TEST_LIBS) $(LINK_USER_SHARED_LIBS)
 
-test_e2e: static $(TEST_APP_E2E)
+test_e2e: static plugins/mock_plugin $(TEST_APP_E2E)
 $(TEST_APP_E2E): $(E2E_TEST_OBJS) $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 	@echo "[CC] Linking $@"
 	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_TEST_LIBS) $(LINK_USER_SHARED_LIBS)
+
+plugins/mock_plugin: tests/fixtures/mock_plugin.c
+	@mkdir -p plugins
+	@$(CC) -O2 $< -o $@
 
 test: test_unit test_e2e
 
@@ -203,3 +207,4 @@ inspect:
 clean:
 	@echo "Clean targets"
 	@rm -rf $(BIN_DIR)
+	@rm -f plugins/mock_plugin

@@ -33,7 +33,7 @@
           "id": "log_association",
           "uses": "./plugins/mock_plugin",
           "with": {
-            "film_title": "${{ steps.fetch_film.body.title }}",
+            "film_title": "${{ jobs.fetch_film.steps.get_film.body.title }}",
             "character_name": "${{ steps.get_character.body.name }}"
           }
         }

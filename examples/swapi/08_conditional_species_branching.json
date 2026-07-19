@@ -20,11 +20,11 @@
       "depends_on": ["fetch_character"],
       "cases": [
         {
-          "condition": "${{ steps.fetch_character.body.height > 170 }}",
+          "condition": "${{ jobs.fetch_character.steps.get_char.body.height > 170 }}",
           "then": ["tall_character_branch"]
         },
         {
-          "condition": "${{ steps.fetch_character.body.height <= 170 }}",
+          "condition": "${{ jobs.fetch_character.steps.get_char.body.height <= 170 }}",
           "then": ["short_character_branch"]
         }
       ],

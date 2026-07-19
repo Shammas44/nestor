@@ -538,6 +538,25 @@ static void update_job_states(WorkflowAST *ast) {
   /*#endregion*/
 }
 
+static void register_loop_job_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj) {
+  /*#region*/
+  char *job_id_cstr = allocate_jsonv_string(arena, aj->job->id.data, aj->job->id.length);
+  Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+  char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+  Jsonv_Value steps_obj = aj->steps_state_obj;
+  if (steps_obj.tag == JSONV_VAL_UNDEFINED) {
+    steps_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+  }
+  jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, steps_obj);
+
+  Jsonv_Value jobs_val_obj;
+  char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+  if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+    jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+  }
+  /*#endregion*/
+}
+
 static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj) {
   /*#region*/
   // Setup next loop iteration index and variables in workflow context.
@@ -564,6 +583,7 @@ static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Json
     if (status != ERR_SUCCESS || !is_truthy(eval_res)) {
       job->execution_state = STATE_SUCCEEDED;
       aj->curr_step = NULL;
+      register_loop_job_outcome(arena, jsonv_arena, context_val, aj);
       return ERR_SUCCESS;
     }
 
@@ -586,6 +606,7 @@ static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Json
       if ((int)aj->loop_iter >= len) {
         job->execution_state = STATE_SUCCEEDED;
         aj->curr_step = NULL;
+        register_loop_job_outcome(arena, jsonv_arena, context_val, aj);
         return ERR_SUCCESS;
       }
 
@@ -613,6 +634,7 @@ static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Json
       if (aj->loop_iter > 0) {
         job->execution_state = STATE_SUCCEEDED;
         aj->curr_step = NULL;
+        register_loop_job_outcome(arena, jsonv_arena, context_val, aj);
         return ERR_SUCCESS;
       }
 
