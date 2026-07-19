@@ -21,8 +21,12 @@ int main(void) {
   fclose(f);
   buf[n] = '\0';
 
-  // Print success json as expected by test_stage5.c
-  printf("{\n  \"plugin_output\": \"success\"\n}\n");
+  // Print success json along with the received arguments
+  if (n > 0) {
+    printf("{\n  \"plugin_output\": \"success\",\n  \"received_args\": %s\n}\n", buf);
+  } else {
+    printf("{\n  \"plugin_output\": \"success\",\n  \"received_args\": null\n}\n");
+  }
   return 0;
   /*#endregion*/
 }
