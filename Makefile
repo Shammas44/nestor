@@ -67,6 +67,13 @@ OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRC_FILES))
 TEST_SRC_FILES := $(wildcard $(TEST_DIR)/*.c)
 TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test_%.o,$(TEST_SRC_FILES))
 
+# Split into Unit and E2E sources & objects
+UNIT_TEST_SRC_FILES := $(filter-out $(TEST_DIR)/examples.test.c, $(TEST_SRC_FILES))
+E2E_TEST_SRC_FILES := $(TEST_DIR)/examples.test.c $(TEST_DIR)/testutils.c
+UNIT_TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test_%.o,$(UNIT_TEST_SRC_FILES))
+E2E_TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test_%.o,$(E2E_TEST_SRC_FILES))
+
+
 # --- Libraries ---
 TEST_LIBS := criterion
 LINK_USER_SHARED_LIBS := $(patsubst %, -l%, $(USER_SHARED_LIBS))
@@ -91,10 +98,11 @@ endif
 
 MAIN_APP_STATIC := $(BIN_DIR)/main
 MAIN_APP_DYNAMIC := $(BIN_DIR)/main_d
-TEST_APP := $(BIN_DIR)/test_runner
+TEST_APP_UNIT := $(BIN_DIR)/test_runner_unit
+TEST_APP_E2E := $(BIN_DIR)/test_runner_e2e
 
 # --- Phony Targets ---
-.PHONY: all static shared test main_d run run_test clean install uninstall bear dirs main run_d inspect
+.PHONY: all static shared test test_unit test_e2e main_d run run_test run_test_unit run_test_e2e clean install uninstall bear dirs main run_d inspect
 
 # --- Main Targets ---
 all: static
@@ -132,11 +140,18 @@ $(MAIN_APP_STATIC): $(OBJ_DIR)/main.o $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 	@echo "[CC] Linking STATIC $@"
 	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_USER_SHARED_LIBS)
 
-# --- Test Executable ---
-test: static $(TEST_APP)
-$(TEST_APP): $(TEST_OBJS) $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
+# --- Test Executables ---
+test_unit: static $(TEST_APP_UNIT)
+$(TEST_APP_UNIT): $(UNIT_TEST_OBJS) $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 	@echo "[CC] Linking $@"
 	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_TEST_LIBS) $(LINK_USER_SHARED_LIBS)
+
+test_e2e: static $(TEST_APP_E2E)
+$(TEST_APP_E2E): $(E2E_TEST_OBJS) $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
+	@echo "[CC] Linking $@"
+	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_TEST_LIBS) $(LINK_USER_SHARED_LIBS)
+
+test: test_unit test_e2e
 
 # --- Compile Rules ---
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | dirs
@@ -172,8 +187,13 @@ run: $(MAIN_APP_STATIC)
 run_d: $(MAIN_APP_DYNAMIC)
 	@MallocNanoZone=0 $(MAIN_APP_DYNAMIC)
 
-run_test: $(TEST_APP)
-	@MallocNanoZone=0 $(TEST_APP) || true
+run_test_unit: $(TEST_APP_UNIT)
+	@MallocNanoZone=0 $(TEST_APP_UNIT) || true
+
+run_test_e2e: $(TEST_APP_E2E)
+	@MallocNanoZone=0 $(TEST_APP_E2E) || true
+
+run_test: run_test_unit run_test_e2e
 
 inspect:
 	@echo "Inspect exposed symbols"
