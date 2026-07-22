@@ -80,6 +80,7 @@ int32_t execute_step(Arena *arena, StepNode *step, Jsonv_Arena *jsonv_arena, Jso
 
     // 2. Setup URL and method
     curl_easy_setopt(curl, CURLOPT_URL, url_cstr);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     if (strcmp(method_cstr, "POST") == 0) {
       curl_easy_setopt(curl, CURLOPT_POST, 1L);
       if (step->http.body.tag == JSONV_VAL_UNDEFINED) {
@@ -416,6 +417,7 @@ struct ActiveJob {
   bool is_loop;
   size_t loop_iter;
   size_t max_iterations;
+  Jsonv_Value loop_history_obj;
 
   // Active HTTP transport fields
   void *easy_handle;
@@ -543,7 +545,7 @@ static void register_loop_job_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, Js
   char *job_id_cstr = allocate_jsonv_string(arena, aj->job->id.data, aj->job->id.length);
   Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
   char *k_steps = allocate_jsonv_string(arena, "steps", 5);
-  Jsonv_Value steps_obj = aj->steps_state_obj;
+  Jsonv_Value steps_obj = (aj->loop_history_obj.tag == JSONV_VAL_OBJ) ? aj->loop_history_obj : aj->steps_state_obj;
   if (steps_obj.tag == JSONV_VAL_UNDEFINED) {
     steps_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
   }
@@ -587,9 +589,25 @@ static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Json
       return ERR_SUCCESS;
     }
 
-    aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
-    char *k_steps = allocate_jsonv_string(arena, "steps", 5);
-    jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+    if (aj->loop_iter == 0) {
+      aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+      aj->loop_history_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+      char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+      jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+
+      char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+      Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+      jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, aj->loop_history_obj);
+      Jsonv_Value jobs_val_obj;
+      char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+      if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+        jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+      }
+    } else {
+      aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+      char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+      jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+    }
     aj->curr_step = job->spec.loop_node.steps_head;
 
   } else if (sv_equals_cstr(job->spec.loop_node.loop_type, "for_each")) {
@@ -626,9 +644,25 @@ static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Json
       char *k_item = allocate_jsonv_string(arena, "item", 4);
       jsonv_obj_set(jsonv_arena, context_val->as.p, k_item, item_val);
 
-      aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
-      char *k_steps = allocate_jsonv_string(arena, "steps", 5);
-      jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+      if (aj->loop_iter == 0) {
+        aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+        aj->loop_history_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+        char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+        jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+
+        char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+        Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+        jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, aj->loop_history_obj);
+        Jsonv_Value jobs_val_obj;
+        char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+        if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+          jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+        }
+      } else {
+        aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+        char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+        jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+      }
       aj->curr_step = job->spec.loop_node.steps_head;
     } else {
       if (aj->loop_iter > 0) {
@@ -644,9 +678,25 @@ static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Json
       char *k_item = allocate_jsonv_string(arena, "item", 4);
       jsonv_obj_set(jsonv_arena, context_val->as.p, k_item, items_val);
 
-      aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
-      char *k_steps = allocate_jsonv_string(arena, "steps", 5);
-      jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+      if (aj->loop_iter == 0) {
+        aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+        aj->loop_history_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+        char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+        jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+
+        char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+        Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+        jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, aj->loop_history_obj);
+        Jsonv_Value jobs_val_obj;
+        char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+        if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+          jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+        }
+      } else {
+        aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+        char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+        jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+      }
       aj->curr_step = job->spec.loop_node.steps_head;
     }
   }
@@ -654,6 +704,24 @@ static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Json
   /*#endregion*/
 }
 
+
+static void save_step_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob *aj, StepNode *step, Jsonv_Obj *outcome_obj) {
+  /*#region*/
+  char *step_id_cstr = allocate_jsonv_string(arena, step->id.data, step->id.length);
+  jsonv_obj_set(jsonv_arena, aj->steps_state_obj.as.p, step_id_cstr, jsonv_val_obj(outcome_obj));
+
+  if (aj->is_loop && aj->loop_history_obj.tag == JSONV_VAL_OBJ) {
+    Jsonv_Value existing_val;
+    if (jsonv_obj_get(aj->loop_history_obj.as.p, step_id_cstr, &existing_val) && existing_val.tag == JSONV_VAL_ARRAY) {
+      jsonv_arr_set(jsonv_arena, existing_val.as.p, (int)aj->loop_iter, jsonv_val_obj(outcome_obj));
+    } else {
+      Jsonv_Arr *arr = jsonv_arr_new(jsonv_arena);
+      jsonv_arr_set(jsonv_arena, arr, (int)aj->loop_iter, jsonv_val_obj(outcome_obj));
+      jsonv_obj_set(jsonv_arena, aj->loop_history_obj.as.p, step_id_cstr, jsonv_val_arr(arr));
+    }
+  }
+  /*#endregion*/
+}
 
 static int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob *aj, long status_code) {
   /*#region*/
@@ -669,7 +737,6 @@ static int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, 
       aj->resp_buf.len = new_len;
     }
   }
-  
   Jsonv_Value body_val = jsonv_val_undefined();
   if (aj->resp_buf.len > 0) {
     Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
@@ -695,8 +762,7 @@ static int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, 
   jsonv_obj_set(jsonv_arena, outcome_obj, k_status_code, jsonv_val_int(status_code));
   jsonv_obj_set(jsonv_arena, outcome_obj, k_body, body_val);
 
-  char *step_id_cstr = allocate_jsonv_string(arena, step->id.data, step->id.length);
-  jsonv_obj_set(jsonv_arena, aj->steps_state_obj.as.p, step_id_cstr, jsonv_val_obj(outcome_obj));
+  save_step_outcome(arena, jsonv_arena, aj, step, outcome_obj);
 
   return ERR_SUCCESS;
   /*#endregion*/
@@ -907,8 +973,7 @@ static int32_t complete_plugin_step_async(Arena *arena, Jsonv_Arena *jsonv_arena
   jsonv_obj_set(jsonv_arena, outcome_obj, k_body, body_val);
   jsonv_obj_set(jsonv_arena, outcome_obj, k_stderr, stderr_val);
 
-  char *step_id_cstr = allocate_jsonv_string(arena, step->id.data, step->id.length);
-  jsonv_obj_set(jsonv_arena, aj->steps_state_obj.as.p, step_id_cstr, jsonv_val_obj(outcome_obj));
+  save_step_outcome(arena, jsonv_arena, aj, step, outcome_obj);
 
   plugin_cleanup(&aj->plugin_exec);
   return ERR_SUCCESS;
@@ -1183,6 +1248,16 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
             aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
             char *k_steps = allocate_jsonv_string(arena, "steps", 5);
             jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+
+            char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+            Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+            jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, aj->steps_state_obj);
+            Jsonv_Value jobs_val_obj;
+            char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+            if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+              jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+            }
+
             aj->curr_step = job->spec.task.steps_head;
             aj->is_loop = false;
           } else if (job->type == NODE_LOOP) {

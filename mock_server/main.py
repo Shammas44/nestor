@@ -62,6 +62,56 @@ async def deploy_secret_endpoint():
         "api_key": "super_secret_token_123"
     }
 
+# Multi-region authentication & Employee directory endpoints
+EMPLOYEE_DB = {
+    "us-east": [
+        {"id": "emp_101", "name": "Alice Smith", "age": 25, "department": "Engineering", "salary": 95000, "region": "us-east", "internal_notes": "Top performer"},
+        {"id": "emp_102", "name": "Bob Jones", "age": 28, "department": "Product", "salary": 88000, "region": "us-east", "internal_notes": "Remote"},
+        {"id": "emp_103", "name": "Charlie Brown", "age": 42, "department": "Executive", "salary": 170000, "region": "us-east", "internal_notes": "HQ"}
+    ],
+    "us-west": [
+        {"id": "emp_201", "name": "David Miller", "age": 22, "department": "Design", "salary": 78000, "region": "us-west", "internal_notes": "Intern"},
+        {"id": "emp_202", "name": "Eve Davis", "age": 35, "department": "Engineering", "salary": 120000, "region": "us-west", "internal_notes": "Lead"}
+    ],
+    "eu-west": [
+        {"id": "emp_301", "name": "Fiona Garcia", "age": 29, "department": "Operations", "salary": 82000, "region": "eu-west", "internal_notes": "Paris"},
+        {"id": "emp_302", "name": "George Wilson", "age": 31, "department": "Sales", "salary": 91000, "region": "eu-west", "internal_notes": "London"}
+    ],
+    "ap-south": [
+        {"id": "emp_401", "name": "Hana Tanaka", "age": 26, "department": "Engineering", "salary": 85000, "region": "ap-south", "internal_notes": "Tokyo"},
+        {"id": "emp_402", "name": "Ian Chen", "age": 24, "department": "Marketing", "salary": 72000, "region": "ap-south", "internal_notes": "Singapore"}
+    ]
+}
+
+@app.post("/api/v1/{region_id}/auth/login")
+async def region_login(region_id: str, request: Request):
+    from fastapi import Response
+    token = f"Bearer token_{region_id}_secret"
+    resp = Response(
+        content=f'{{"status": "authenticated", "region": "{region_id}", "token": "{token}"}}',
+        media_type="application/json"
+    )
+    resp.headers["Authorization"] = token
+    return resp
+
+@app.get("/api/v1/{region_id}/employees")
+async def get_region_employees(region_id: str, max_age: int = 100):
+    emps = EMPLOYEE_DB.get(region_id, [])
+    ids = [e["id"] for e in emps if e["age"] < max_age]
+    return {
+        "region": region_id,
+        "employee_ids": ids
+    }
+
+@app.get("/api/v1/{region_id}/employees/{emp_id}")
+async def get_employee_details(region_id: str, emp_id: str):
+    emps = EMPLOYEE_DB.get(region_id, [])
+    for e in emps:
+        if e["id"] == emp_id:
+            return e
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail="Employee not found")
+
 # Catch-all endpoint for general echos/diagnostics
 @app.api_route("/{path_name:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def catch_all(request: Request, path_name: str):

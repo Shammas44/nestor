@@ -14,13 +14,14 @@ static void *my_jsonata_arena_alloc(void *user_data, size_t size) {
 
 static void my_jsonata_arena_reset(void *user_data) {
   /*#region*/
-  arena_reset((Arena *)user_data);
+  (void)user_data;
   /*#endregion*/
 }
 
 static void my_jsonata_arena_reset_to(void *user_data, size_t keep_size) {
   /*#region*/
-  arena_restore((Arena *)user_data, keep_size);
+  (void)user_data;
+  (void)keep_size;
   /*#endregion*/
 }
 
@@ -39,8 +40,21 @@ static const Jsonata_Arena_Ops my_jsonata_ops = {
 
 // Converts a Jsonv_Value (from the jsonv library) recursively into a Jsonata_Value
 // suitable for evaluation by the jsonata expression engine.
-static Jsonata_Value *convert_jsonv_to_jsonata(Jsonata_Arena *jsonata_arena, Jsonv_Value v) {
+static Jsonata_Value *convert_jsonv_to_jsonata_impl(Jsonata_Arena *jsonata_arena, Jsonv_Value v, int depth) {
   /*#region*/
+  if (depth > 64) {
+    fprintf(stderr, "CYCLE DETECTED: depth=%d, tag=%d\n", depth, v.tag);
+    if (v.tag == JSONV_VAL_OBJ) {
+      Jsonv_Obj *obj = v.as.p;
+      int len = jsonv_obj_length(obj);
+      fprintf(stderr, "Circular Object keys (%d):\n", len);
+      for (int i = 0; i < len; i++) {
+        fprintf(stderr, "  [%d] key='%s'\n", i, jsonv_obj_key_at(obj, i));
+      }
+    }
+    return NULL;
+  }
+
   Jsonata_Value *res = jsonata_value_alloc(jsonata_arena);
   if (!res)
     return NULL;
@@ -82,7 +96,7 @@ static Jsonata_Value *convert_jsonv_to_jsonata(Jsonata_Arena *jsonata_arena, Jso
         for (int i = 0; i < len; i++) {
           Jsonv_Value item;
           if (jsonv_arr_get(arr, i, &item)) {
-            res->u.array.items[i] = convert_jsonv_to_jsonata(jsonata_arena, item);
+            res->u.array.items[i] = convert_jsonv_to_jsonata_impl(jsonata_arena, item, depth + 1);
             if (!res->u.array.items[i])
               return NULL;
           } else {
@@ -108,7 +122,7 @@ static Jsonata_Value *convert_jsonv_to_jsonata(Jsonata_Arena *jsonata_arena, Jso
           Jsonv_Value val = jsonv_obj_val_at(obj, i);
           res->u.obj.members[i].key.ptr = key;
           res->u.obj.members[i].key.len = strlen(key);
-          res->u.obj.members[i].value = convert_jsonv_to_jsonata(jsonata_arena, val);
+          res->u.obj.members[i].value = convert_jsonv_to_jsonata_impl(jsonata_arena, val, depth + 1);
           if (!res->u.obj.members[i].value)
             return NULL;
         }
@@ -123,6 +137,10 @@ static Jsonata_Value *convert_jsonv_to_jsonata(Jsonata_Arena *jsonata_arena, Jso
   }
   return res;
   /*#endregion*/
+}
+
+static Jsonata_Value *convert_jsonv_to_jsonata(Jsonata_Arena *jsonata_arena, Jsonv_Value v) {
+  return convert_jsonv_to_jsonata_impl(jsonata_arena, v, 0);
 }
 
 static char *allocate_jsonv_string(Arena *arena, const char *data, size_t len) {
@@ -360,6 +378,31 @@ Jsonv_Value resolve_json_value(Arena *arena, Jsonv_Value v, Jsonv_Arena *jsonv_a
   switch (v.tag) {
     case JSONV_VAL_STRING: {
       StringView orig_sv = { (const char *)v.as.p, jsonv_val_str_len(v) };
+
+      StringView trimmed = orig_sv;
+      while (trimmed.length > 0 && (trimmed.data[0] == ' ' || trimmed.data[0] == '\t' || trimmed.data[0] == '\n' || trimmed.data[0] == '\r')) {
+        trimmed.data++;
+        trimmed.length--;
+      }
+      while (trimmed.length > 0 && (trimmed.data[trimmed.length - 1] == ' ' || trimmed.data[trimmed.length - 1] == '\t' || trimmed.data[trimmed.length - 1] == '\n' || trimmed.data[trimmed.length - 1] == '\r')) {
+        trimmed.length--;
+      }
+
+      if (trimmed.length >= 5 && trimmed.data[0] == '$' && trimmed.data[1] == '{' && trimmed.data[2] == '{' &&
+          trimmed.data[trimmed.length - 2] == '}' && trimmed.data[trimmed.length - 1] == '}') {
+        size_t close_pos = 3;
+        while (close_pos + 1 < trimmed.length - 2 && !(trimmed.data[close_pos] == '}' && trimmed.data[close_pos + 1] == '}')) {
+          close_pos++;
+        }
+        if (close_pos + 1 == trimmed.length - 2) {
+          StringView expr_sv = { trimmed.data + 3, trimmed.length - 5 };
+          Jsonv_Value eval_res = jsonv_val_undefined();
+          if (evaluate_expression(arena, expr_sv, jsonv_arena, context_val, &eval_res) == ERR_SUCCESS) {
+            return eval_res;
+          }
+        }
+      }
+
       StringView resolved_sv;
       if (resolve_string(arena, orig_sv, jsonv_arena, context_val, &resolved_sv) == ERR_SUCCESS) {
         char *str = allocate_jsonv_string(arena, resolved_sv.data, resolved_sv.length);

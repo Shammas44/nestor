@@ -26,5 +26,6 @@ struct Transport {
 Transport *transport_curl_new(Arena *arena);
 Transport *transport_mock_new(Arena *arena);
 void transport_mock_add_response(const char *url, const char *method, long status_code, const char *body);
+void transport_mock_clear(void);
 
 #endif

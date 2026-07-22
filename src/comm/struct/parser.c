@@ -11,13 +11,14 @@ static void *my_jsonv_arena_alloc(void *user_data, size_t size) {
 
 static void my_jsonv_arena_reset(void *user_data) {
   /*#region*/
-  arena_reset((Arena *)user_data);
+  (void)user_data;
   /*#endregion*/
 }
 
 static void my_jsonv_arena_reset_to(void *user_data, size_t keep_size) {
   /*#region*/
-  arena_restore((Arena *)user_data, keep_size);
+  (void)user_data;
+  (void)keep_size;
   /*#endregion*/
 }
 

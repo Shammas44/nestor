@@ -37,9 +37,22 @@ static void print_jsonv_value(Jsonv_Value v) {
     case JSONV_VAL_DOUBLE:
       printf("%g", v.as.d);
       break;
-    case JSONV_VAL_STRING:
-      printf("\"%.*s\"", (int)jsonv_val_str_len(v), (const char *)v.as.p);
+    case JSONV_VAL_STRING: {
+      size_t str_len = jsonv_val_str_len(v);
+      const char *str = (const char *)v.as.p;
+      putchar('"');
+      for (size_t k = 0; k < str_len; k++) {
+        char c = str[k];
+        if (c == '"') fputs("\\\"", stdout);
+        else if (c == '\\') fputs("\\\\", stdout);
+        else if (c == '\n') fputs("\\n", stdout);
+        else if (c == '\r') fputs("\\r", stdout);
+        else if (c == '\t') fputs("\\t", stdout);
+        else putchar(c);
+      }
+      putchar('"');
       break;
+    }
     case JSONV_VAL_ARRAY: {
       printf("[");
       int len = jsonv_arr_length(v.as.p);

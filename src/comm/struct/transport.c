@@ -83,6 +83,7 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
 
   curl_easy_setopt(curl, CURLOPT_URL, url_cstr);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
   StringView method = step->http.method;
   if (sv_equals_cstr(method, "POST")) {
@@ -283,17 +284,20 @@ struct MockResponseEntry {
 };
 
 static MockResponseEntry *mock_responses_head = NULL;
+static MockResponseEntry static_pool[128];
+static size_t static_pool_idx = 0;
+
+void transport_mock_clear(void) {
+  /*#region*/
+  mock_responses_head = NULL;
+  static_pool_idx = 0;
+  /*#endregion*/
+}
 
 void transport_mock_add_response(const char *url, const char *method, long status_code, const char *body) {
   /*#region*/
-  // Note: For unit testing, since malloc is forbidden, we can statically/arena allocate it.
-  // In our tests, we will just allocate a static pool or allow arena allocation if we pass it,
-  // but to keep it simple, we can just use a static array of mock entries!
-  static MockResponseEntry static_pool[64];
-  static size_t static_pool_idx = 0;
-  
   MockResponseEntry *entry = NULL;
-  if (static_pool_idx < 64) {
+  if (static_pool_idx < 128) {
     entry = &static_pool[static_pool_idx++];
   } else {
     return;

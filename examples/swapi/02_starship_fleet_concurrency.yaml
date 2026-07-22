@@ -1,0 +1,47 @@
+version: 2.0.0
+name: SWAPI Starship Fleet Concurrency
+'on':
+  manual: {}
+jobs:
+  fork_queries:
+    type: fork
+    branches:
+    - fetch_xwing
+    - fetch_falcon
+  fetch_xwing:
+    type: task
+    steps:
+    - id: get_xwing
+      http:
+        method: GET
+        url: https://swapi.dev/api/starships/12/
+  fetch_falcon:
+    type: task
+    steps:
+    - id: get_falcon
+      http:
+        method: GET
+        url: https://swapi.dev/api/starships/10/
+  join_fleet:
+    type: join
+    strategy: all
+    depends_on:
+    - fetch_xwing
+    - fetch_falcon
+  evaluate_fleet:
+    type: task
+    depends_on:
+    - join_fleet
+    steps:
+    - id: log_fleet_stats
+      uses: "./plugins/mock_plugin"
+      with:
+        xwing_passengers: "${{ jobs.fetch_xwing.steps.get_xwing.body.passengers }}"
+        data: "${{ jobs.fetch_xwing.steps.get_xwing.body }}"
+        # Ceci est un commentaire
+        total_passengers: |
+          ${{
+            $number(jobs.fetch_xwing.steps.get_xwing.body.passengers) + 
+            $number(jobs.fetch_falcon.steps.get_falcon.body.passengers)
+          }}
+        falcon_passengers: "${{ jobs.fetch_falcon.steps.get_falcon.body.passengers }}"

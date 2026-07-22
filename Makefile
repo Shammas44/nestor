@@ -105,7 +105,7 @@ TEST_APP_E2E := $(BIN_DIR)/test_runner_e2e
 .PHONY: all static shared test test_unit test_e2e main_d run run_test run_test_unit run_test_e2e clean install uninstall bear dirs main run_d inspect
 
 # --- Main Targets ---
-all: static
+all: static main plugins/mock_plugin test_unit test_e2e
 
 bear: clean dirs
 	@echo "Generating compile_commands.json..."

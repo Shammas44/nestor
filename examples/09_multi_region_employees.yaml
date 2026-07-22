@@ -1,0 +1,152 @@
+version: 2.0.0
+name: Multi-Region Employee Data Aggregation
+on:
+  manual: {}
+
+jobs:
+  fork_regions:
+    type: fork
+    branches:
+      - region_us_east_auth
+      - region_us_west_auth
+      - region_eu_west_auth
+      - region_ap_south_auth
+
+  region_us_east_auth:
+    type: task
+    steps:
+      - id: login_us_east
+        http:
+          method: POST
+          url: http://127.0.0.1:8080/api/v1/us-east/auth/login
+          body:
+            region_id: us-east
+      - id: get_ids_us_east
+        http:
+          method: GET
+          url: http://127.0.0.1:8080/api/v1/us-east/employees?max_age=30
+          headers:
+            Authorization: "${{ jobs.region_us_east_auth.steps.login_us_east.body.token }}"
+
+  fetch_us_east_employees:
+    type: loop
+    loop_type: for_each
+    items: "${{ jobs.region_us_east_auth.steps.get_ids_us_east.body.employee_ids }}"
+    depends_on:
+      - region_us_east_auth
+    steps:
+      - id: fetch_emp
+        http:
+          method: GET
+          url: "http://127.0.0.1:8080/api/v1/us-east/employees/${{ item }}"
+          headers:
+            Authorization: "${{ jobs.region_us_east_auth.steps.login_us_east.body.token }}"
+
+  region_us_west_auth:
+    type: task
+    steps:
+      - id: login_us_west
+        http:
+          method: POST
+          url: http://127.0.0.1:8080/api/v1/us-west/auth/login
+          body:
+            region_id: us-west
+      - id: get_ids_us_west
+        http:
+          method: GET
+          url: http://127.0.0.1:8080/api/v1/us-west/employees?max_age=30
+          headers:
+            Authorization: "${{ jobs.region_us_west_auth.steps.login_us_west.body.token }}"
+
+  fetch_us_west_employees:
+    type: loop
+    loop_type: for_each
+    items: "${{ jobs.region_us_west_auth.steps.get_ids_us_west.body.employee_ids }}"
+    depends_on:
+      - region_us_west_auth
+    steps:
+      - id: fetch_emp
+        http:
+          method: GET
+          url: "http://127.0.0.1:8080/api/v1/us-west/employees/${{ item }}"
+          headers:
+            Authorization: "${{ jobs.region_us_west_auth.steps.login_us_west.body.token }}"
+
+  region_eu_west_auth:
+    type: task
+    steps:
+      - id: login_eu_west
+        http:
+          method: POST
+          url: http://127.0.0.1:8080/api/v1/eu-west/auth/login
+          body:
+            region_id: eu-west
+      - id: get_ids_eu_west
+        http:
+          method: GET
+          url: http://127.0.0.1:8080/api/v1/eu-west/employees?max_age=30
+          headers:
+            Authorization: "${{ jobs.region_eu_west_auth.steps.login_eu_west.body.token }}"
+
+  fetch_eu_west_employees:
+    type: loop
+    loop_type: for_each
+    items: "${{ jobs.region_eu_west_auth.steps.get_ids_eu_west.body.employee_ids }}"
+    depends_on:
+      - region_eu_west_auth
+    steps:
+      - id: fetch_emp
+        http:
+          method: GET
+          url: "http://127.0.0.1:8080/api/v1/eu-west/employees/${{ item }}"
+          headers:
+            Authorization: "${{ jobs.region_eu_west_auth.steps.login_eu_west.body.token }}"
+
+  region_ap_south_auth:
+    type: task
+    steps:
+      - id: login_ap_south
+        http:
+          method: POST
+          url: http://127.0.0.1:8080/api/v1/ap-south/auth/login
+          body:
+            region_id: ap-south
+      - id: get_ids_ap_south
+        http:
+          method: GET
+          url: http://127.0.0.1:8080/api/v1/ap-south/employees?max_age=30
+          headers:
+            Authorization: "${{ jobs.region_ap_south_auth.steps.login_ap_south.body.token }}"
+
+  fetch_ap_south_employees:
+    type: loop
+    loop_type: for_each
+    items: "${{ jobs.region_ap_south_auth.steps.get_ids_ap_south.body.employee_ids }}"
+    depends_on:
+      - region_ap_south_auth
+    steps:
+      - id: fetch_emp
+        http:
+          method: GET
+          url: "http://127.0.0.1:8080/api/v1/ap-south/employees/${{ item }}"
+          headers:
+            Authorization: "${{ jobs.region_ap_south_auth.steps.login_ap_south.body.token }}"
+
+  join_all_regions:
+    type: join
+    strategy: all
+    depends_on:
+      - fetch_us_east_employees
+      - fetch_us_west_employees
+      - fetch_eu_west_employees
+      - fetch_ap_south_employees
+
+  consolidate_employees:
+    type: task
+    depends_on:
+    - join_all_regions
+    steps:
+    - id: log_output
+      uses: "./plugins/mock_plugin"
+      with:
+        data: "${{ jobs.*.steps.fetch_emp.body }}"

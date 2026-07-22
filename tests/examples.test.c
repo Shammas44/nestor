@@ -11,6 +11,7 @@
 static void init() {
   /*#region*/
   test_init();
+  transport_mock_clear();
 
   // Register mock HTTP responses matching endpoints hit in example files
   transport_mock_add_response("127.0.0.1:8080/api/provision", "POST", 200, "{\"success\": true, \"resource_id\": \"res-123\", \"status\": \"active\"}");
@@ -28,6 +29,24 @@ static void init() {
   transport_mock_add_response("swapi.dev/api/starships/10/", "GET", 200, "{\"name\": \"Millennium Falcon\", \"passengers\": \"6\"}");
   transport_mock_add_response("swapi.dev/api/starships/12/", "GET", 200, "{\"name\": \"X-wing\", \"passengers\": \"0\"}");
   transport_mock_add_response("swapi.dev/api/films/1/", "GET", 200, "{\"title\": \"A New Hope\", \"characters\": [\"https://swapi.dev/api/people/1/\", \"https://swapi.dev/api/people/2/\"]}");
+  // Multi-Region Employee Mock Responses
+  transport_mock_add_response("127.0.0.1:8080/api/v1/us-east/auth/login", "POST", 200, "{\"status\": \"authenticated\", \"region\": \"us-east\", \"token\": \"Bearer token_us_east_123\"}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/us-east/employees?max_age=30", "GET", 200, "{\"region\": \"us-east\", \"employee_ids\": [\"emp_101\", \"emp_102\"]}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/us-east/employees/emp_101", "GET", 200, "{\"id\": \"emp_101\", \"name\": \"Alice Smith\", \"age\": 25, \"department\": \"Engineering\", \"salary\": 95000, \"region\": \"us-east\", \"internal_notes\": \"Top performer\"}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/us-east/employees/emp_102", "GET", 200, "{\"id\": \"emp_102\", \"name\": \"Bob Jones\", \"age\": 28, \"department\": \"Product\", \"salary\": 88000, \"region\": \"us-east\", \"internal_notes\": \"Remote\"}");
+
+  transport_mock_add_response("127.0.0.1:8080/api/v1/us-west/auth/login", "POST", 200, "{\"status\": \"authenticated\", \"region\": \"us-west\", \"token\": \"Bearer token_us_west_123\"}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/us-west/employees?max_age=30", "GET", 200, "{\"region\": \"us-west\", \"employee_ids\": [\"emp_201\"]}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/us-west/employees/emp_201", "GET", 200, "{\"id\": \"emp_201\", \"name\": \"David Miller\", \"age\": 22, \"department\": \"Design\", \"salary\": 78000, \"region\": \"us-west\", \"internal_notes\": \"Intern\"}");
+
+  transport_mock_add_response("127.0.0.1:8080/api/v1/eu-west/auth/login", "POST", 200, "{\"status\": \"authenticated\", \"region\": \"eu-west\", \"token\": \"Bearer token_eu_west_123\"}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/eu-west/employees?max_age=30", "GET", 200, "{\"region\": \"eu-west\", \"employee_ids\": [\"emp_301\"]}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/eu-west/employees/emp_301", "GET", 200, "{\"id\": \"emp_301\", \"name\": \"Fiona Garcia\", \"age\": 29, \"department\": \"Operations\", \"salary\": 82000, \"region\": \"eu-west\", \"internal_notes\": \"Paris\"}");
+
+  transport_mock_add_response("127.0.0.1:8080/api/v1/ap-south/auth/login", "POST", 200, "{\"status\": \"authenticated\", \"region\": \"ap-south\", \"token\": \"Bearer token_ap_south_123\"}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/ap-south/employees?max_age=30", "GET", 200, "{\"region\": \"ap-south\", \"employee_ids\": [\"emp_401\", \"emp_402\"]}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/ap-south/employees/emp_401", "GET", 200, "{\"id\": \"emp_401\", \"name\": \"Hana Tanaka\", \"age\": 26, \"department\": \"Engineering\", \"salary\": 85000, \"region\": \"ap-south\", \"internal_notes\": \"Tokyo\"}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/ap-south/employees/emp_402", "GET", 200, "{\"id\": \"emp_402\", \"name\": \"Ian Chen\", \"age\": 24, \"department\": \"Marketing\", \"salary\": 72000, \"region\": \"ap-south\", \"internal_notes\": \"Singapore\"}");
   /*#endregion*/
 }
 
@@ -100,6 +119,12 @@ static Jsonv_Value get_step_outcome(Arena *arena, Jsonv_Obj *root_obj, const cha
 static int64_t get_step_status_code(Arena *arena, Jsonv_Obj *root_obj, const char *job_id, const char *step_id) {
   /*#region*/
   Jsonv_Value outcome = get_step_outcome(arena, root_obj, job_id, step_id);
+  if (outcome.tag == JSONV_VAL_ARRAY) {
+    Jsonv_Value first_item;
+    if (jsonv_arr_get(outcome.as.p, 0, &first_item)) {
+      outcome = first_item;
+    }
+  }
   if (outcome.tag == JSONV_VAL_OBJ) {
     Jsonv_Value status_code_val;
     if (jsonv_obj_get(outcome.as.p, "status_code", &status_code_val) && status_code_val.tag == JSONV_VAL_INT) {
@@ -255,6 +280,16 @@ TIMED_TEST(examples, loops, init, fini)
   Jsonv_Value ctx = run_example_test(arena, "examples/08_loops.json");
   int64_t status = get_step_status_code(arena, ctx.as.p, "for_each_loop", "deploy_region");
   cr_assert_eq(status, 200);
+  arena_destroy(arena);
+/*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(examples, multi_region_employees, init, fini)
+/*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/09_multi_region_employees.yaml");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "consolidate_employees", "log_output");
+  cr_assert_eq(status, 0, "Expected status 0, got %ld", (long)status);
   arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
