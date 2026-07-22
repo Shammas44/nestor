@@ -71,3 +71,51 @@ The chained arena allocator (`Arena`) is strictly deterministic and does not rec
   * At the start of a loop iteration, allocate a sub-arena node off the main Arena.
   * Redirect all transient step execution variables, headers, and intermediate string conversions during that iteration to the sub-arena.
   * When the loop iteration finishes, reset or free the sub-arena block, returning its memory to the pool while keeping the parent workflow-scoped variables intact.
+
+---
+
+## Stage 8.7: SQLite-Backed Workflow-Wide Cache & Eviction Strategy
+
+### 1. Problem Description
+Repeating redundant API calls and heavy data operations drains network bandwidth, increases job latency, and risks rate-limiting. A workflow-wide caching layer is required.
+
+### 2. Proposed Design
+* **SQLite Backend**: Integrate an SQLite database file. Enable WAL mode (`PRAGMA journal_mode=WAL;`) and configure a busy timeout of 5000ms.
+* **Deterministic Caching**: Cache key is a SHA-256 hash of job configurations, resolved inputs, and environment variables.
+* **Active Eviction**:
+  * TTL eviction checks expiration stamps on lookups and deletes expired rows on writes.
+  * LRU eviction caps database entries via a row limit (e.g. `max_cache_entries`), deleting the oldest accessed rows based on `last_accessed_at`.
+
+---
+
+## Stage 8.8: Edge-Based Conditional execution
+
+### 1. Problem Description
+Nestor's default execution model lacks robust error recovery and conditional branching, marking downstream jobs as skipped/failed upon upstream failures.
+
+### 2. Proposed Design
+* **Edge-Based Conditions**: Support `onSuccess`, `onFailure`, `onCompletion`, and `onSkip` on dependencies.
+* **Bitwise Masks**: Compactly pack satisfying dependency states as `uint8_t` flags within the `JobNode` structures to avoid dynamic memory usage.
+* **Propagated Skips**: Automatically propagate skipped states unless satisfied by an `onSkip` condition edge downstream.
+
+---
+
+## Stage 8.9: Native JSONata transform Job
+
+### 1. Problem Description
+Spawning external processes for simple JSON parsing and restructuring is slow and requires excessive disk write/read cycles.
+
+### 2. Proposed Design
+* **transform Job Type**: A native job node executing JSONata queries.
+* **Zero-Copy Evaluation**: Evaluates JSONata directly inside the host process's active arena space without process spawning or external serialization.
+
+---
+
+## Stage 9.0: Dynamic Plugin SDK & Subprocess Sandboxing
+
+### 1. Problem Description
+Subprocess plugins introduce execution delays, whereas dynamic libraries (`.so`/`.dylib`) loaded in-process run in the same memory space, risking host engine crashes if code is untrusted.
+
+### 2. Proposed Design
+* **C ABI Dynamic SDK**: Stable interface for runtime dynamic loading via `dlopen`. Direct access to host memory arenas for zero-overhead, leak-free allocations.
+* **subprocess Sandboxing Flag**: Introduce `"sandboxed": true` configuration. When true, the engine wraps plugin execution in an isolated helper subprocess wrapper, capturing crashes safely.

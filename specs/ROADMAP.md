@@ -321,6 +321,84 @@ Write test scripts using both C and Python SDKs. Verify they compile and run, co
 
 ---
 
+### Stage 8.7: SQLite-Backed Cache & Eviction Strategy
+
+#### Objective
+Implement an SQLite-backed caching system for job outputs that respects HTTP cache headers and uses a hybrid TTL and LRU eviction policy.
+
+#### Files & Structures
+- `src/include/cache.h` & `src/comm/struct/cache.c`
+
+#### Detailed Steps
+1. Configure SQLite in WAL mode with a 5000ms busy timeout.
+2. Implement SHA-256 key hashing from job type, inputs, and environment context.
+3. Write lookup code parsing HTTP cache headers (`Cache-Control`, `Expires`, `ETag`, `Last-Modified`).
+4. Implement eviction routines:
+   - TTL prune query: `DELETE FROM nestor_cache WHERE expires_at < NOW` on writes.
+   - LRU prune query: delete oldest entries based on `last_accessed_at` when the table count exceeds `max_cache_entries`.
+
+#### E2E Verification
+Run tests caching mock HTTP response payloads. Verify that subsequent identical requests retrieve cached JSON from SQLite directly. Simulate cache saturation and verify that older records are evicted based on last access timestamps.
+
+---
+
+### Stage 8.8: Edge-Based Conditional execution
+
+#### Objective
+Incorporate Synapse-inspired edge execution conditions in the DAG compiler and runner scheduler loops.
+
+#### Files & Structures
+- `src/include/ast.h`
+- `src/comm/struct/compiler.c`
+- `src/comm/struct/runner.c`
+
+#### Detailed Steps
+1. Extend `depends_on` parsing in `compiler.c` to accept string/object dependencies and map them into the `JobNode` structures.
+2. Store condition bitmasks (`onSuccess`, `onFailure`, `onSkip`, `onCompletion`) in a compact `uint8_t` array parallel to dependency pointers.
+3. Rewrite the scheduler readiness checker to perform bitwise state evaluation and propagate skipped states downstream.
+
+#### E2E Verification
+Define a DAG where Job C runs `onFailure` of Job A and Job D runs `onSkip` of Job B. Trigger a failure in Job A and verify that Job C executes while other success-dependent jobs are skipped correctly.
+
+---
+
+### Stage 8.9: Native JSONata transform Job
+
+#### Objective
+Implement the zero-copy, in-process native `transform` node.
+
+#### Files & Structures
+- `src/comm/struct/runner.c`
+
+#### Detailed Steps
+1. Parse the `transform` node type and compile the inline JSONata expression.
+2. In the runner loop, invoke the JSONata engine directly using the active thread's current `Arena` context.
+3. Write query output back into the job outcomes workspace without process boundary transitions.
+
+#### E2E Verification
+Execute a workflow defining a `transform` job filtering and mapping an upstream task's outputs using JSONata. Verify the returned JSON is correct and that zero heap memory allocations are made outside the active Arena.
+
+---
+
+### Stage 8.10: Dynamic Plugin SDK & Subprocess Sandboxing
+
+#### Objective
+Implement dynamical shared-library plugins and the `sandboxed` subprocess execution wrapper.
+
+#### Files & Structures
+- `src/include/plugin.h` & `src/comm/struct/plugin.c`
+
+#### Detailed Steps
+1. Write dynamic loader routines using `dlopen` / `dlsym` resolving the stable C ABI structure (`NestorPluginAPI` / `NestorHostAPI`).
+2. Pass host-managed `Arena` pointers to loaded dynamic plugins for memory allocation control.
+3. Write subprocess isolation runner executing dynamic plugins in a separate process space when `"sandboxed": true` is set.
+
+#### E2E Verification
+Load a dynamic library plugin in-process. Verify it queries variables and returns outputs successfully. Set `"sandboxed": true` on a second plugin run, trigger a segmentation fault in the plugin binary, and verify that the host engine catches the subprocess crash gracefully and propagates a failure code.
+
+---
+
+
 ## 4. Phase 2: Long-Lived Workflows (Stateful Server)
 
 Phase 2 transitions the engine to Server Mode. Workflows are deployed via API, state transitions are logged to an event-sourced SQL database, and asynchronous boundaries pause runs until correlation signals or timers arrive.

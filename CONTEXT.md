@@ -28,9 +28,30 @@ _Avoid_: HTTPClient, WebClient
 A deep module consolidating expression evaluation (JSONata), template interpolation (`{{...}}`), and duration parsing.
 _Avoid_: Parser, Interpolator
 
+**Transform**:
+A native, zero-copy, in-process job type executing JSONata transformations on the workflow context.
+_Avoid_: MapJob, ConvertNode
+
+**ConditionalDependency**:
+An edge-based execution logic constraint specifying satisfying terminal states (onSuccess, onFailure, onCompletion, onSkip) for upstream execution.
+_Avoid_: TriggerRule, NodeCondition
+
+**DynamicPlugin**:
+A dynamic shared library (.so/.dylib) loaded in-process at runtime, sharing the host engine's memory arenas.
+_Avoid_: SharedLibraryAddon, NativeExtension
+
+**SubprocessSandboxing**:
+A mechanism executing untrusted plugins in an isolated helper subprocess wrapper to isolate execution failures.
+_Avoid_: PluginContainer, IsolationHost
+
+**SQLiteCache**:
+A local caching subsystem employing TTL-based expiration and LRU size-capping eviction strategies.
+_Avoid_: LocalStoreCache, StateCache
+
 ## Example Dialogue
 
 **Developer**: How do we prevent **Steps** inside a **Job** from polluting each other's output?
 **Domain Expert**: Each **Job** execution tracks its outcomes in a structured context, but when a **Job** runs a loop, its local sub-arena is recycled on each iteration.
 **Developer**: And if a **Step** needs to query other **Job** variables at runtime?
 **Domain Expert**: The **PluginExecutor** exposes a Unix socket where the plugin can query the **Evaluator** to resolve paths in the active context dynamically.
+

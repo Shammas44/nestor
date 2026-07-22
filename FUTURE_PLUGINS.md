@@ -74,3 +74,20 @@ def main():
 if __name__ == '__main__':
     main()
 ```
+
+---
+
+## 5. Dynamic Shared-Library Plugin SDK (Phase 1 Extension)
+Nestor supports compiled shared libraries (`.so`/`.dylib`) using a stable ABI and capability negotiation. 
+
+### Host API Function Pointers
+The dynamic library registers by receiving function pointers to host-implemented operations:
+*   `void* (*alloc)(void *arena_ptr, size_t size)` - Allocate memory off the host-managed job `Arena`.
+*   `void (*log)(int level, const char *message)` - Write log output.
+*   `const char* (*get_variable)(void *ctx_ptr, const char *json_path)` - Resolve context variables.
+*   `int32_t (*set_output)(void *ctx_ptr, const char *key, const char *json_val)` - Set step/job outputs.
+
+### Sandboxed Subprocess Isolation
+*   **Property**: `"sandboxed": true`
+*   **Behavior**: When configured, the host spawns a subprocess wrapper (`nestor-plugin-runner`) to isolate unverified plugins, capturing crashes, timeouts, and leaks without impacting the main engine's daemon execution.
+

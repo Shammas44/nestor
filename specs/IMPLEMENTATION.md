@@ -113,9 +113,17 @@ Since external shared libraries utilize default allocators, the engine uses cust
 - **Purpose:** `libcurl` drives steps under `http` blocks; `libmicrohttpd` runs the API daemon.
 - **Bridge Strategy:** Overwrite default memory management via `curl_global_init_mem` to direct cURL heap operations to a thread-local arena, or enforce strict cleanup scopes.
 
-### 3.4 `sqlite3` & `libpq` (Event-Sourced Persistence)
-- **Purpose:** Persisting workflow state changes in Server Mode.
-- **Bridge Strategy:** Configure SQLite to use our memory allocator using `sqlite3_config(SQLITE_CONFIG_MALLOC, ...)`.
+### 3.4 `sqlite3` & `libpq` (Event-Sourced Persistence & Cache Subsystem)
+- **Purpose:** Persisting workflow state changes in Server Mode and managing the local cache.
+- **Bridge & WAL Strategy:** Configure SQLite to use our memory allocator using `sqlite3_config(SQLITE_CONFIG_MALLOC, ...)`. Enable Write-Ahead Logging (`PRAGMA journal_mode=WAL;`) and configure a busy timeout of 5000ms using `sqlite3_busy_timeout` to prevent locking under parallel job execution.
+- **Eviction Triggers:** Implement automated TTL cleanup and LRU size pruning queries running in single transactional blocks on every write.
+
+### 3.5 Dynamic Link Plugins (Plugin SDK & Sandboxing)
+- **Dynamic Loading:** Loads dynamic libraries (`.so`/`.dylib`) using `dlopen()` and resolves entry symbols using `dlsym()`.
+- **Double-Pointer Register:** Enforces stable ABI by passing `NestorHostAPI` function pointer structures to the library and populating `NestorPluginAPI` structures returned by the plugin.
+- **Memory Arena Hook:** Host passes active job `Arena*` to the plugin's execution call. The plugin must request memory using the host's allocation function pointer.
+- **Sandboxing Execution:** If `"sandboxed": true` is set in the configuration, the engine wraps execution in an isolated helper subprocess wrapper via `fork()` + `execvp()`, communicating outcomes through stdout and catching segmentation/leak errors.
+
 
 ---
 
@@ -126,6 +134,7 @@ To eliminate pointer indirection overhead, `nestor` utilizes intrusive structure
 ```c
 typedef enum {
     NODE_TASK,
+    NODE_TRANSFORM,
     NODE_IF,
     NODE_SWITCH,
     NODE_FORK,
@@ -144,6 +153,7 @@ struct JobNode {
     // Intrusive topological graph pointers
     JobNode* next_sorted;  // Linked list of topologically sorted jobs
     JobNode** depends_on;  // Array of upstream dependencies (allocated in Arena)
+    uint8_t* depends_on_conditions; // Bitmask conditions for each dependency edge
     size_t dependency_count;
 
     // Bitwise state tracking
@@ -153,6 +163,11 @@ struct JobNode {
         struct {
             struct StepNode* steps_head; // Intrusive step linked list
         } task;
+
+        struct {
+            StringView expression; // JSONata expression for transform
+        } transform;
+
 
         struct {
             StringView condition;
@@ -252,11 +267,14 @@ typedef struct {
 For example, in a `loop` node, the iteration number, loop context, and execution status are compressed into single `uint64_t` registers.
 
 ### 6.2 Execution Semantics
+- **Conditional Dependency Evaluation:** Before promoting a job from `STATE_PENDING` to `STATE_RUNNING`, the scheduler loops through all upstream jobs in `depends_on`. For each upstream job, it retrieves the execution state and performs a bitwise comparison against `depends_on_conditions`. If all edges match, the job is promoted. If any mismatch, the job transitions to `STATE_SKIPPED` and skips propagate.
+- **`transform` nodes:** The engine executes the specified JSONata query directly in the active thread's current `Arena` context. It reads from the global `Jsonv_Value` variable workspace and writes output back to the local outcomes, avoiding process boundaries.
 - **`if` and `switch` nodes:** The engine evaluates the JSONata expressions. Based on the returned boolean or matching branch index, it marks skipped paths as `SKIPPED` in the state array, and adds valid targets to the execution path.
 - **`fork` and `join` nodes:** The engine spawns execution branches. In CLI mode, the scheduler executes them sequentially or multiplexes HTTP tasks using `curl_multi`. In Server Mode, jobs are pushed to a job queue.
 - **`wait_signal` and `wait_timer` (Asynchronous Boundaries):**
   - **CLI Mode:** Throws `ERR_CLI_UNSUPPORTED_BLOCKING_NODE` and exits immediately with code `1`.
   - **Server Mode:** Suspends execution, serializes current variable context to the event store, and releases worker resources.
+
 
 ---
 

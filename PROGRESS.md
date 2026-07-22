@@ -20,6 +20,10 @@
 - [x] **Stage 8.4: Loop Iteration Memory Compaction & Sub-Arenas**
 - [x] **Stage 8.5: Dedicated Stderr Stream Logging for Subprocess Plugins**
 - [x] **Stage 8.6: Interactive Unix Socket IPC API for Dynamic Plugin Context Queries**
+- [ ] **Stage 8.7: SQLite-Backed Cache & Eviction Strategy**
+- [ ] **Stage 8.8: Edge-Based Conditional Execution**
+- [ ] **Stage 8.9: Native JSONata Transform Job**
+- [ ] **Stage 8.10: Dynamic Plugin SDK & Subprocess Sandboxing**
 - [x] **Architectural Refactorings**:
   - [x] **Candidate 1**: Deepen Subprocess Plugin Executor (`plugin.h`, `plugin.c`)
   - [x] **Candidate 2**: Decouple HTTP execution via Transport Seam (`transport.h`, `transport.c`)

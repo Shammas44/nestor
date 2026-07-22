@@ -85,6 +85,7 @@ The graph relies on distinct node archetypes defined by the `type` field at the 
 graph TD
     Job[Job Node] --> Type{type Field}
     Type -->|task| Task[Task Node: Sequential HTTP/Plugin Steps]
+    Type -->|transform| Transform[Transform Node: Zero-Copy JSONata]
     Type -->|if| If[If Node: Binary Conditional Branching]
     Type -->|switch| Switch[Switch Node: Multi-path Conditional Branching]
     Type -->|fork| Fork[Fork Node: Parallel Split]
@@ -96,6 +97,9 @@ graph TD
 
 ### 3.1 Task Nodes (Action Nodes)
 - **`task` (Default):** Executes concrete operations sequentially. Contains a list of `steps` which map to `http` blocks or utilize plugins.
+
+### 3.1.2 Transform Nodes (Action Nodes)
+- **`transform`:** Executes an in-process, zero-copy JSONata expression. Contains an `expression` parameter representing the query/transformation to perform on the context JSON.
 
 ### 3.2 Control Flow Nodes (Structural Nodes)
 These nodes dictate the routing and iteration of the graph without performing external system side-effects.
@@ -113,11 +117,19 @@ These nodes dictate the routing and iteration of the graph without performing ex
 
 ## 4. Execution Semantics & Topologies
 
-- **Sequential Execution:** Controlled via the `depends_on: [job_id]` array.
+- **Sequential Execution & Conditional Dependencies:** Controlled via the `depends_on` array. Nestor supports edge-based conditional dependencies. A dependency can be defined as:
+  *   A plain string, representing an implicit `onSuccess` condition.
+  *   An object specifying the parent `job` and an array of `conditions` (values: `onSuccess`, `onFailure`, `onCompletion`, `onSkip`).
+  
+  *Downstream Execution Rules:*
+  *   A job is evaluated when all its dependencies have reached a terminal state (`STATE_SUCCEEDED`, `STATE_FAILED`, or `STATE_SKIPPED`).
+  *   A job runs only if all its incoming dependency conditions are satisfied. If any condition is unsatisfied, the job is marked as `STATE_SKIPPED` and skipped state propagates downstream.
+  
 - **Explicit Forking (`type: fork`):** While `depends_on` can implicitly branch paths, the `fork` node makes parallel branch intentions explicit, allowing the engine to allocate worker threads proactively.
-- **Advanced Synchronization (`type: join`):** The `join` node allows complex merge conditions. For example, triggering a downstream job as soon as any one of 5 parallel approval paths succeeds, rather than waiting for all of them.
+- **Advanced Synchronization (`type: join`):** The `join` node allows complex merge conditions. The merge condition is evaluated based on its `strategy` (`all`, `any`, `n_required`) over satisfied incoming edges.
 - **Bounded Loops (`type: loop`):** To prevent infinite execution blocking engine resources, all `while` loops must define a `max_iterations` integer limit. Exceeding this limit results in a node failure (`ERR_LOOP_MAX_ITERATIONS`).
 - **Cycles:** Except for the isolated execution within a `loop` node, the overall job topography remains a Directed Acyclic Graph (DAG). The compiler utilizes Kahn's algorithm; cyclic job dependencies result in an `ERR_CYCLIC_DEP` compilation failure.
+
 
 ---
 
@@ -142,6 +154,8 @@ Plugins handle complex integrations (e.g., LDAP/Active Directory, gRPC, custom e
 | :--- | :--- | :--- | :--- |
 | `uses` | `string` | **Yes** | Registry identifier (e.g., `nestor-plugins/active-directory@v2`). |
 | `with` | `map` | No | Key-value arguments conforming to the plugin's schema. |
+| `sandboxed` | `boolean` | No | If `true`, executes the plugin in a separate process space for security boundary isolation (default: `false`). |
+
 
 ---
 
@@ -378,4 +392,22 @@ jobs:
           url: "https://hooks.slack.com/notify"
           body:
             text: "Deployment fully completed."
+
+---
+
+## 13. SQLite-Backed Caching
+Nestor incorporates a local SQLite caching subsystem.
+- **Deterministic Key**: A SHA-256 hash computed over the job type, specification parameters, resolved runtime inputs, and active environment context.
+- **HTTP Cache Compliance**: HTTP jobs automatically respect `Cache-Control` directive headers (`max-age`, `no-cache`, `no-store`), `Expires` timestamps, and execute conditional validation (`ETag` with `If-None-Match`, `Last-Modified` with `If-Modified-Since`).
+- **TTL Eviction Strategy**: Stale records are automatically ignored during lookups. A pruning routine deletes expired rows on every cache write transaction.
+- **LRU Eviction Strategy**: Database size is capped at `max_cache_entries` rows. Write operations exceeding this limit trigger an LRU eviction, deleting the oldest records ordered by `last_accessed_at`.
+
+## 14. CLI Flags & Precedence
+Nestor supports runtime command-line configurations with a strict resolution hierarchy (highest overrides lowest):
+1. **CLI Flags** (e.g., `--parallelism`, `--no-cache`, `--var`, `--secret`)
+2. **Environment Variables** (prefixed with `NESTOR_`)
+3. **Workflow-Specific Config** (configured at the workflow definition root)
+4. **Global Configuration File** (`/etc/nestor/config.json` or `~/.nestor/config.json`)
+5. **Engine Defaults**
+
 ```
