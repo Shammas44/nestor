@@ -18,12 +18,31 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "type": { "type": "string", "enum": ["task", "if", "switch", "fork", "join", "loop", "wait_signal", "wait_timer"] },
+          "type": { "type": "string", "enum": ["task", "if", "switch", "fork", "join", "loop", "wait_signal", "wait_timer", "transform"] },
           "name": { "type": "string" },
           "depends_on": {
             "anyOf": [
               { "type": "string" },
-              { "type": "array", "items": { "type": "string" } }
+              {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    { "type": "string" },
+                    {
+                      "type": "object",
+                      "required": ["job"],
+                      "properties": {
+                        "job": { "type": "string" },
+                        "conditions": {
+                          "type": "array",
+                          "items": { "type": "string", "enum": ["onSuccess", "onFailure", "onCompletion", "onSkip"] },
+                          "minItems": 1
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
             ]
           },
           "steps": {
@@ -46,6 +65,7 @@
                 },
                 "uses": { "type": "string" },
                 "with": { "type": "object" },
+                "sandboxed": { "type": "boolean" },
                 "timeout": { "type": "string" },
                 "retry_attempts": { "type": "integer" },
                 "retry_backoff": { "type": "string" },

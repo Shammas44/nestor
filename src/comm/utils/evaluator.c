@@ -222,15 +222,24 @@ int32_t evaluate_expression(Arena *arena, StringView expr, Jsonv_Arena *jsonv_ar
   if (!jsonata_arena)
     return ERR_OOM;
 
-  // Strip ${{ and }} boundaries if present
+  // Trim leading/trailing whitespace first to handle block scalar trailing newlines
   StringView raw_expr = expr;
-  if (expr.length >= 4 && expr.data[0] == '$' && expr.data[1] == '{' && expr.data[2] == '{' &&
-      expr.data[expr.length - 2] == '}' && expr.data[expr.length - 1] == '}') {
-    raw_expr.data = expr.data + 3;
-    raw_expr.length = expr.length - 5;
+  while (raw_expr.length > 0 && (raw_expr.data[0] == ' ' || raw_expr.data[0] == '\t' || raw_expr.data[0] == '\n' || raw_expr.data[0] == '\r')) {
+    raw_expr.data++;
+    raw_expr.length--;
+  }
+  while (raw_expr.length > 0 && (raw_expr.data[raw_expr.length - 1] == ' ' || raw_expr.data[raw_expr.length - 1] == '\t' || raw_expr.data[raw_expr.length - 1] == '\n' || raw_expr.data[raw_expr.length - 1] == '\r')) {
+    raw_expr.length--;
   }
 
-  // Trim whitespace
+  // Strip ${{ and }} boundaries if present
+  if (raw_expr.length >= 5 && raw_expr.data[0] == '$' && raw_expr.data[1] == '{' && raw_expr.data[2] == '{' &&
+      raw_expr.data[raw_expr.length - 2] == '}' && raw_expr.data[raw_expr.length - 1] == '}') {
+    raw_expr.data += 3;
+    raw_expr.length -= 5;
+  }
+
+  // Trim whitespace inside boundaries
   while (raw_expr.length > 0 && (raw_expr.data[0] == ' ' || raw_expr.data[0] == '\t' || raw_expr.data[0] == '\n' || raw_expr.data[0] == '\r')) {
     raw_expr.data++;
     raw_expr.length--;

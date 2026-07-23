@@ -62,7 +62,7 @@ INSTALL_LIB_DIR := $(PREFIX)/lib
 INSTALL_INCLUDE_DIR := $(PREFIX)/include/$(PROJECT_NAME)
 
 # --- Source Files and Objects ---
-SRC_FILES := $(shell find $(SRC_DIR) -type f -name "*.c")
+SRC_FILES := $(shell find $(SRC_DIR) -type f -name "*.c" ! -name "plugin_runner.c")
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRC_FILES))
 TEST_SRC_FILES := $(wildcard $(TEST_DIR)/*.c)
 TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test_%.o,$(TEST_SRC_FILES))
@@ -83,6 +83,9 @@ STATIC_LIB_BIN_PATHS := $(shell find lib -maxdepth 2 -type d -name "bin")
 STATIC_LIB_INCLUDE_PATHS := $(shell find lib -maxdepth 2 -type d -name "include")
 LDFLAGS := -L $(LIB_DIR) -L/usr/local/lib $(patsubst %, -L%, $(STATIC_LIB_BIN_PATHS)) -Wl,-rpath,/usr/local/lib
 LDLIBS := -l$(PROJECT_NAME) $(LINK_USER_SHARED_LIBS)
+ifneq ($(UNAME_S), Darwin)
+  LDLIBS += -ldl
+endif
 
 ifneq ($(NESTOR_DIR),)
     LDFLAGS += -L$(NESTOR_DIR)/bin/lib
@@ -105,7 +108,7 @@ TEST_APP_E2E := $(BIN_DIR)/test_runner_e2e
 .PHONY: all static shared test test_unit test_e2e main_d run run_test run_test_unit run_test_e2e clean install uninstall bear dirs main run_d inspect
 
 # --- Main Targets ---
-all: static main plugins/mock_plugin test_unit test_e2e
+all: static main plugins/mock_plugin bin/nestor-plugin-runner test_unit test_e2e
 
 bear: clean dirs
 	@echo "Generating compile_commands.json..."
@@ -164,6 +167,14 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | dirs
 	@$(CC) $(CFLAGS) $(INC_FLAGS) -c $< -o $@
 
 $(OBJ_DIR)/main.o: main.c | dirs
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) $(INC_FLAGS) -c $< -o $@
+
+bin/nestor-plugin-runner: $(OBJ_DIR)/plugin_runner.o $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
+	@echo "[CC] Linking $@"
+	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+$(OBJ_DIR)/plugin_runner.o: src/plugin_runner.c | dirs
 	@echo "[CC] $<"
 	@$(CC) $(CFLAGS) $(INC_FLAGS) -c $< -o $@
 

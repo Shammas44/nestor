@@ -3,7 +3,13 @@
 #include "aho_corasick.h"
 #include "transport.h"
 #include "plugin.h"
+#include "cache.h"
+#include <time.h>
 #include <curl/curl.h>
+
+typedef struct ActiveJob ActiveJob;
+static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj);
+static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, JobNode *job, ActiveJob *aj_out);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -160,8 +166,7 @@ int32_t execute_step(Arena *arena, StepNode *step, Jsonv_Arena *jsonv_arena, Jso
     }
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms);
 
-    // 6. Capture response body
-    ResponseBuffer resp_buf = { arena, NULL, 0, 0 };
+    ResponseBuffer resp_buf = { .arena = arena };
     resp_buf.cap = 4096;
     resp_buf.buf = na_alloc(arena, resp_buf.cap);
     resp_buf.buf[0] = '\0';
@@ -277,7 +282,7 @@ int32_t execute_step(Arena *arena, StepNode *step, Jsonv_Arena *jsonv_arena, Jso
     } else {
       close(pipefd[1]);
 
-      ResponseBuffer resp_buf = { arena, NULL, 0, 0 };
+      ResponseBuffer resp_buf = { .arena = arena };
       resp_buf.cap = 4096;
       resp_buf.buf = na_alloc(arena, resp_buf.cap);
       resp_buf.buf[0] = '\0';
@@ -433,8 +438,35 @@ struct ActiveJob {
 
   Arena *loop_arena;
 
+  // Caching/validation fields
+  bool is_validating;
+  char cached_key[65];
+  char cached_etag[128];
+  char cached_last_modified[128];
+  char *cached_output_payload;
+
   ActiveJob *next;
 };
+
+static bool is_edge_satisfied(JobNode *job, size_t d, JobNode *dep) {
+  /*#region*/
+  uint8_t mask = 0;
+  if (job->depends_on_conditions) {
+    mask = job->depends_on_conditions[d];
+  } else {
+    if (job->type == NODE_JOIN && sv_equals_cstr(job->spec.join_node.strategy, "all")) {
+      mask = DEP_COND_SUCCESS | DEP_COND_SKIP;
+    } else {
+      mask = DEP_COND_SUCCESS;
+    }
+  }
+
+  if (dep->execution_state == STATE_SUCCEEDED && (mask & DEP_COND_SUCCESS)) return true;
+  if (dep->execution_state == STATE_FAILED && (mask & DEP_COND_FAILURE)) return true;
+  if (dep->execution_state == STATE_SKIPPED && (mask & DEP_COND_SKIP)) return true;
+  return false;
+  /*#endregion*/
+}
 
 static bool is_ready(JobNode *job) {
   /*#region*/
@@ -468,6 +500,7 @@ static void update_job_states(WorkflowAST *ast) {
           size_t num_failed = 0;
           size_t num_skipped = 0;
           size_t num_completed = 0;
+          size_t num_satisfied = 0;
 
           for (size_t d = 0; d < job->dependency_count; d++) {
             JobNode *dep = job->depends_on_nodes[d];
@@ -481,32 +514,67 @@ static void update_job_states(WorkflowAST *ast) {
               num_skipped++;
               num_completed++;
             }
+
+            if (dep->execution_state == STATE_SUCCEEDED ||
+                dep->execution_state == STATE_FAILED ||
+                dep->execution_state == STATE_SKIPPED) {
+              if (is_edge_satisfied(job, d, dep)) {
+                num_satisfied++;
+              }
+            }
           }
 
           if (job->type == NODE_JOIN) {
             bool join_ok = false;
             bool join_evaluated = false;
 
-            if (sv_equals_cstr(job->spec.join_node.strategy, "all")) {
-              if (num_completed == job->dependency_count) {
-                join_ok = (num_succeeded + num_skipped == job->dependency_count);
-                join_evaluated = true;
+            if (job->depends_on_conditions != NULL) {
+              // Edge-based conditions specified
+              if (sv_equals_cstr(job->spec.join_node.strategy, "all")) {
+                if (num_completed == job->dependency_count) {
+                  join_ok = (num_satisfied == job->dependency_count);
+                  join_evaluated = true;
+                }
+              } else if (sv_equals_cstr(job->spec.join_node.strategy, "any")) {
+                if (num_satisfied > 0) {
+                  join_ok = true;
+                  join_evaluated = true;
+                } else if (num_completed == job->dependency_count) {
+                  join_ok = false;
+                  join_evaluated = true;
+                }
+              } else if (sv_equals_cstr(job->spec.join_node.strategy, "n_required")) {
+                if (num_satisfied >= job->spec.join_node.n_required) {
+                  join_ok = true;
+                  join_evaluated = true;
+                } else if (num_completed == job->dependency_count) {
+                  join_ok = false;
+                  join_evaluated = true;
+                }
               }
-            } else if (sv_equals_cstr(job->spec.join_node.strategy, "any")) {
-              if (num_succeeded > 0) {
-                join_ok = true;
-                join_evaluated = true;
-              } else if (num_completed == job->dependency_count) {
-                join_ok = false;
-                join_evaluated = true;
-              }
-            } else if (sv_equals_cstr(job->spec.join_node.strategy, "n_required")) {
-              if (num_succeeded >= job->spec.join_node.n_required) {
-                join_ok = true;
-                join_evaluated = true;
-              } else if (num_completed == job->dependency_count) {
-                join_ok = false;
-                join_evaluated = true;
+            } else {
+              // Backward compatibility fallback
+              if (sv_equals_cstr(job->spec.join_node.strategy, "all")) {
+                if (num_completed == job->dependency_count) {
+                  join_ok = (num_succeeded + num_skipped == job->dependency_count);
+                  join_evaluated = true;
+                }
+              } else if (sv_equals_cstr(job->spec.join_node.strategy, "any")) {
+                if (num_succeeded > 0) {
+                  join_ok = true;
+                  join_evaluated = true;
+                } else if (num_completed == job->dependency_count) {
+                  join_ok = false;
+                  join_evaluated = true;
+                }
+              } else if (sv_equals_cstr(job->spec.join_node.strategy, "n_required")) {
+                if (num_succeeded >= job->spec.join_node.n_required) {
+                  join_ok = true;
+                  join_evaluated = true;
+                } else if (num_completed == job->dependency_count) {
+                  join_ok = false;
+                  join_evaluated = true;
+                }
               }
             }
 
@@ -520,15 +588,27 @@ static void update_job_states(WorkflowAST *ast) {
             }
           } else {
             // Non-join nodes
-            if (num_completed == job->dependency_count) {
-              if (num_failed > 0) {
-                job->execution_state = STATE_FAILED;
-                propagate_control_skips(ast, job);
-                changed = true;
-              } else if (num_skipped == job->dependency_count) {
-                job->execution_state = STATE_SKIPPED;
-                propagate_control_skips(ast, job);
-                changed = true;
+            if (job->depends_on_conditions != NULL) {
+              // Edge-based conditions specified
+              if (num_completed == job->dependency_count) {
+                if (num_satisfied < job->dependency_count) {
+                  job->execution_state = STATE_SKIPPED;
+                  propagate_control_skips(ast, job);
+                  changed = true;
+                }
+              }
+            } else {
+              // Backward compatibility fallback
+              if (num_completed == job->dependency_count) {
+                if (num_failed > 0) {
+                  job->execution_state = STATE_FAILED;
+                  propagate_control_skips(ast, job);
+                  changed = true;
+                } else if (num_skipped == job->dependency_count) {
+                  job->execution_state = STATE_SKIPPED;
+                  propagate_control_skips(ast, job);
+                  changed = true;
+                }
               }
             }
           }
@@ -726,6 +806,18 @@ static void save_step_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob 
 static int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob *aj, long status_code) {
   /*#region*/
   // Complete processing and bind HTTP response variables back into workspace.
+  if (aj->is_validating && status_code == 304) {
+    Jsonv_Value cached_steps_val = jsonv_val_undefined();
+    Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+    if (temp_ctx && jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)aj->cached_output_payload)) {
+      jsonv_ctx_get_value(temp_ctx, &cached_steps_val);
+      if (cached_steps_val.tag == JSONV_VAL_OBJ) {
+        aj->steps_state_obj = cached_steps_val;
+      }
+    }
+    return ERR_SUCCESS;
+  }
+
   StepNode *step = aj->curr_step;
 
   ACNode *ac_root = get_global_ac_root();
@@ -938,12 +1030,34 @@ static int32_t complete_plugin_step_async(Arena *arena, Jsonv_Arena *jsonv_arena
   }
 
   Jsonv_Value body_val = jsonv_val_undefined();
+  Jsonv_Value outputs_val = jsonv_val_undefined();
+  bool has_outputs = false;
+
   if (aj->plugin_exec.child_resp_buf.len > 0) {
     Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
     if (temp_ctx) {
       if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)aj->plugin_exec.child_resp_buf.buf) ||
           jsonv_ctx_parse_yaml_data(temp_ctx, (const unsigned char *)aj->plugin_exec.child_resp_buf.buf)) {
-        jsonv_ctx_get_value(temp_ctx, &body_val);
+        Jsonv_Value parsed_val;
+        jsonv_ctx_get_value(temp_ctx, &parsed_val);
+        if (parsed_val.tag == JSONV_VAL_OBJ) {
+          Jsonv_Value outs;
+          char *k_outs = allocate_jsonv_string(arena, "outputs", 7);
+          if (jsonv_obj_get(parsed_val.as.p, k_outs, &outs) && outs.tag == JSONV_VAL_OBJ) {
+            outputs_val = outs;
+            has_outputs = true;
+            Jsonv_Value sc;
+            char *k_sc = allocate_jsonv_string(arena, "status_code", 11);
+            if (jsonv_obj_get(parsed_val.as.p, k_sc, &sc) && sc.tag == JSONV_VAL_INT) {
+              exit_code = sc.as.i;
+            }
+            body_val = jsonv_val_null();
+          } else {
+            body_val = parsed_val;
+          }
+        } else {
+          body_val = parsed_val;
+        }
       } else {
         char *str = allocate_jsonv_string(arena, aj->plugin_exec.child_resp_buf.buf, aj->plugin_exec.child_resp_buf.len);
         body_val = jsonv_val_str(str);
@@ -972,6 +1086,11 @@ static int32_t complete_plugin_step_async(Arena *arena, Jsonv_Arena *jsonv_arena
   jsonv_obj_set(jsonv_arena, outcome_obj, k_status_code, jsonv_val_int(exit_code));
   jsonv_obj_set(jsonv_arena, outcome_obj, k_body, body_val);
   jsonv_obj_set(jsonv_arena, outcome_obj, k_stderr, stderr_val);
+
+  if (has_outputs) {
+    char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
+    jsonv_obj_set(jsonv_arena, outcome_obj, k_outputs, outputs_val);
+  }
 
   save_step_outcome(arena, jsonv_arena, aj, step, outcome_obj);
 
@@ -1045,6 +1164,8 @@ static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
         if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
           jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
         }
+
+        store_job_in_cache(arena, ast, *context_val, aj->job, aj);
       }
     }
   }
@@ -1059,6 +1180,280 @@ struct IPCClient {
   int len;
   IPCClient *next;
 };
+
+static void parse_cache_control(const char *cc, bool *no_cache, bool *no_store, int *max_age) {
+  /*#region*/
+  *no_cache = false;
+  *no_store = false;
+  *max_age = -1;
+  if (!cc) return;
+
+  char cc_copy[256];
+  strncpy(cc_copy, cc, sizeof(cc_copy) - 1);
+  cc_copy[sizeof(cc_copy) - 1] = '\0';
+
+  char *token = strtok(cc_copy, ",");
+  while (token) {
+    while (*token == ' ' || *token == '\t') token++;
+    char *end = token + strlen(token) - 1;
+    while (end >= token && (*end == ' ' || *end == '\t')) *end-- = '\0';
+
+    if (strcasecmp(token, "no-cache") == 0) {
+      *no_cache = true;
+    } else if (strcasecmp(token, "no-store") == 0) {
+      *no_store = true;
+    } else if (strncasecmp(token, "max-age=", 8) == 0) {
+      *max_age = atoi(token + 8);
+    }
+    token = strtok(NULL, ",");
+  }
+  /*#endregion*/
+}
+
+static void generate_job_cache_key(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, char *out_hex) {
+  /*#region*/
+  const char *job_type_str = (job->type == NODE_TASK) ? "task" : "transform";
+
+  char *spec_json = "";
+  Jsonv_Value jobs_val;
+  if (jsonv_obj_get(ast->root_val.as.p, "jobs", &jobs_val) && jobs_val.tag == JSONV_VAL_OBJ) {
+    char *job_id_cstr = sv_to_cstring(arena, job->id);
+    Jsonv_Value job_spec_val;
+    if (jsonv_obj_get(jobs_val.as.p, job_id_cstr, &job_spec_val)) {
+      serialize_jsonv_value(arena, job_spec_val, &spec_json);
+    }
+  }
+
+  char *inputs_json = "";
+  Jsonv_Value inputs_val;
+  if (jsonv_obj_get(context_val.as.p, "inputs", &inputs_val)) {
+    serialize_jsonv_value(arena, inputs_val, &inputs_json);
+  }
+
+  char *env_json = "";
+  Jsonv_Value env_val;
+  if (jsonv_obj_get(context_val.as.p, "env", &env_val)) {
+    serialize_jsonv_value(arena, env_val, &env_json);
+  }
+
+  cache_generate_key(job_type_str, spec_json, inputs_json, env_json, out_hex);
+  /*#endregion*/
+}
+
+static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj) {
+  /*#region*/
+  const char *no_cache_env = getenv("NESTOR_NO_CACHE");
+  if (no_cache_env && (strcmp(no_cache_env, "true") == 0 || strcmp(no_cache_env, "1") == 0)) {
+    return;
+  }
+
+  char cache_key[65];
+  generate_job_cache_key(arena, ast, context_val, job, cache_key);
+
+  char *job_type_str = (job->type == NODE_TASK) ? "task" : "transform";
+  char *job_id_cstr = sv_to_cstring(arena, job->id);
+
+  char *etag = NULL;
+  char *last_modified = NULL;
+  int ttl_seconds = -1;
+  bool no_store = false;
+  bool no_cache = false;
+
+  if (job->type == NODE_TASK && aj) {
+    StepNode *step = job->spec.task.steps_head;
+    while (step) {
+      if (step->is_http) {
+        if (aj->resp_buf.cache_control[0] != '\0') {
+          bool step_no_cache = false;
+          bool step_no_store = false;
+          int step_max_age = -1;
+          parse_cache_control(aj->resp_buf.cache_control, &step_no_cache, &step_no_store, &step_max_age);
+          if (step_no_store) no_store = true;
+          if (step_no_cache) no_cache = true;
+          if (step_max_age >= 0) {
+            if (ttl_seconds == -1 || step_max_age < ttl_seconds) {
+              ttl_seconds = step_max_age;
+            }
+          }
+        }
+        if (aj->resp_buf.expires[0] != '\0') {
+          time_t exp_time = curl_getdate(aj->resp_buf.expires, NULL);
+          if (exp_time != -1) {
+            time_t now = time(NULL);
+            int exp_ttl = (int)(exp_time - now);
+            if (exp_ttl < 0) exp_ttl = 0;
+            if (ttl_seconds == -1 || exp_ttl < ttl_seconds) {
+              ttl_seconds = exp_ttl;
+            }
+          }
+        }
+        if (aj->resp_buf.etag[0] != '\0') {
+          etag = aj->resp_buf.etag;
+        }
+        if (aj->resp_buf.last_modified[0] != '\0') {
+          last_modified = aj->resp_buf.last_modified;
+        }
+      }
+      step = step->next;
+    }
+  }
+
+  if (no_store) {
+    return;
+  }
+
+  if (no_cache && ttl_seconds > 0) {
+    ttl_seconds = 0;
+  }
+
+  char *output_payload = NULL;
+  if (job->type == NODE_TASK && aj) {
+    serialize_jsonv_value(arena, aj->steps_state_obj, &output_payload);
+  } else if (job->type == NODE_TRANSFORM) {
+    Jsonv_Value jobs_val_obj;
+    char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+    if (jsonv_obj_get(context_val.as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+      Jsonv_Value job_outcome_obj;
+      if (jsonv_obj_get(jobs_val_obj.as.p, job_id_cstr, &job_outcome_obj) && job_outcome_obj.tag == JSONV_VAL_OBJ) {
+        Jsonv_Value trans_outputs;
+        char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
+        if (jsonv_obj_get(job_outcome_obj.as.p, k_outputs, &trans_outputs)) {
+          serialize_jsonv_value(arena, trans_outputs, &output_payload);
+        }
+      }
+    }
+  }
+
+  if (output_payload) {
+    char *headers_json = NULL;
+    if (job->type == NODE_TASK && aj && aj->resp_buf.cache_control[0] != '\0') {
+      Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast->jsonv_ctx);
+      Jsonv_Obj *hdr_obj = jsonv_obj_new(jsonv_arena, NULL);
+      char *k_cc = allocate_jsonv_string(arena, "Cache-Control", 13);
+      jsonv_obj_set(jsonv_arena, hdr_obj, k_cc, jsonv_val_str(allocate_jsonv_string(arena, aj->resp_buf.cache_control, strlen(aj->resp_buf.cache_control))));
+      if (etag) {
+        char *k_etag = allocate_jsonv_string(arena, "ETag", 4);
+        jsonv_obj_set(jsonv_arena, hdr_obj, k_etag, jsonv_val_str(allocate_jsonv_string(arena, etag, strlen(etag))));
+      }
+      if (last_modified) {
+        char *k_lm = allocate_jsonv_string(arena, "Last-Modified", 13);
+        jsonv_obj_set(jsonv_arena, hdr_obj, k_lm, jsonv_val_str(allocate_jsonv_string(arena, last_modified, strlen(last_modified))));
+      }
+      serialize_jsonv_value(arena, jsonv_val_obj(hdr_obj), &headers_json);
+    }
+
+    cache_store(cache_key, job_id_cstr, job_type_str, 200, headers_json, output_payload, etag, last_modified, ttl_seconds);
+  }
+  /*#endregion*/
+}
+
+static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, JobNode *job, ActiveJob *aj_out) {
+  /*#region*/
+  const char *no_cache_env = getenv("NESTOR_NO_CACHE");
+  if (no_cache_env && (strcmp(no_cache_env, "true") == 0 || strcmp(no_cache_env, "1") == 0)) {
+    return false;
+  }
+
+  char cache_key[65];
+  generate_job_cache_key(arena, ast, *context_val, job, cache_key);
+
+  long status_code = 0;
+  char *headers_json = NULL;
+  char *output_payload = NULL;
+  char *etag = NULL;
+  char *last_modified = NULL;
+
+  int32_t rc = cache_lookup(arena, cache_key, &status_code, &headers_json, &output_payload, &etag, &last_modified);
+  if (rc == ERR_SUCCESS) {
+    bool no_cache = false;
+    bool no_store = false;
+    int max_age = -1;
+
+    if (headers_json) {
+      Jsonv_Context *hdr_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+      Jsonv_Value hdr_val;
+      if (hdr_ctx && jsonv_ctx_parse_data(hdr_ctx, (const unsigned char *)headers_json)) {
+        jsonv_ctx_get_value(hdr_ctx, &hdr_val);
+        Jsonv_Value cc_val;
+        char *k_cc = allocate_jsonv_string(arena, "Cache-Control", 13);
+        if (jsonv_obj_get(hdr_val.as.p, k_cc, &cc_val) && cc_val.tag == JSONV_VAL_STRING) {
+          char *cc_str = sv_to_cstring(arena, (StringView){cc_val.as.p, jsonv_val_str_len(cc_val)});
+          parse_cache_control(cc_str, &no_cache, &no_store, &max_age);
+        }
+      }
+    }
+
+    if (no_cache) {
+      if (etag == NULL && last_modified == NULL) {
+        return false;
+      }
+    }
+
+    if (!no_cache) {
+      if (job->type == NODE_TASK) {
+        Jsonv_Value steps_obj_val = jsonv_val_undefined();
+        Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+        if (temp_ctx && jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)output_payload)) {
+          jsonv_ctx_get_value(temp_ctx, &steps_obj_val);
+        }
+
+        char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+        jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, steps_obj_val);
+
+        char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+        Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+        jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, steps_obj_val);
+
+        Jsonv_Value jobs_val_obj;
+        char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+        if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+          jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+        }
+      } else if (job->type == NODE_TRANSFORM) {
+        Jsonv_Value trans_val = jsonv_val_undefined();
+        Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+        if (temp_ctx && jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)output_payload)) {
+          jsonv_ctx_get_value(temp_ctx, &trans_val);
+        }
+
+        char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+        Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+        char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
+        jsonv_obj_set(jsonv_arena, job_outcome_obj, k_outputs, trans_val);
+        char *k_output = allocate_jsonv_string(arena, "output", 6);
+        jsonv_obj_set(jsonv_arena, job_outcome_obj, k_output, trans_val);
+        char *k_result = allocate_jsonv_string(arena, "result", 6);
+        jsonv_obj_set(jsonv_arena, job_outcome_obj, k_result, trans_val);
+
+        Jsonv_Value jobs_val_obj;
+        char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+        if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+          jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+        }
+      }
+
+      job->execution_state = STATE_SUCCEEDED;
+      return true;
+    } else if (aj_out) {
+      aj_out->is_validating = true;
+      strncpy(aj_out->cached_key, cache_key, 64);
+      aj_out->cached_key[64] = '\0';
+      if (etag) {
+        strncpy(aj_out->cached_etag, etag, sizeof(aj_out->cached_etag) - 1);
+        aj_out->cached_etag[sizeof(aj_out->cached_etag) - 1] = '\0';
+      }
+      if (last_modified) {
+        strncpy(aj_out->cached_last_modified, last_modified, sizeof(aj_out->cached_last_modified) - 1);
+        aj_out->cached_last_modified[sizeof(aj_out->cached_last_modified) - 1] = '\0';
+      }
+      aj_out->cached_output_payload = output_payload;
+      return false;
+    }
+  }
+
+  return false;
+  /*#endregion*/
+}
 
 int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_val, Transport *transport) {
   /*#region*/
@@ -1215,6 +1610,39 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
             job->execution_state = STATE_SUCCEEDED;
             control_flow_progress = true;
             break;
+          } else if (job->type == NODE_TRANSFORM) {
+            if (check_and_apply_cache(arena, jsonv_arena, ast, context_val, job, NULL)) {
+              control_flow_progress = true;
+              break;
+            }
+            job->execution_state = STATE_RUNNING;
+            Jsonv_Value transform_res = jsonv_val_undefined();
+            int32_t status = evaluate_expression(arena, job->spec.transform.expression, jsonv_arena, *context_val, &transform_res);
+            if (status != ERR_SUCCESS) {
+              job->execution_state = STATE_FAILED;
+              ret_val = status;
+              goto cleanup;
+            }
+
+            char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+            Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+            char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
+            jsonv_obj_set(jsonv_arena, job_outcome_obj, k_outputs, transform_res);
+            char *k_output = allocate_jsonv_string(arena, "output", 6);
+            jsonv_obj_set(jsonv_arena, job_outcome_obj, k_output, transform_res);
+            char *k_result = allocate_jsonv_string(arena, "result", 6);
+            jsonv_obj_set(jsonv_arena, job_outcome_obj, k_result, transform_res);
+
+            Jsonv_Value jobs_val_obj;
+            char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+            if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+              jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+            }
+
+            job->execution_state = STATE_SUCCEEDED;
+            store_job_in_cache(arena, ast, *context_val, job, NULL);
+            control_flow_progress = true;
+            break;
           }
         }
         job = job->next_sorted;
@@ -1235,6 +1663,15 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
             break;
           }
         }
+        ActiveJob temp_aj;
+        memset(&temp_aj, 0, sizeof(ActiveJob));
+        if (job->type == NODE_TASK) {
+          if (check_and_apply_cache(arena, jsonv_arena, ast, context_val, job, &temp_aj)) {
+            control_flow_progress = true;
+            break;
+          }
+        }
+
         if (job->type == NODE_TASK || job->type == NODE_LOOP || job->type == NODE_WAIT_TIMER) {
           ActiveJob *aj = na_alloc(arena, sizeof(ActiveJob));
           if (!aj) {
@@ -1245,6 +1682,23 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
           aj->job = job;
 
           if (job->type == NODE_TASK) {
+            if (temp_aj.is_validating) {
+              aj->is_validating = true;
+              strcpy(aj->cached_key, temp_aj.cached_key);
+              strcpy(aj->cached_etag, temp_aj.cached_etag);
+              strcpy(aj->cached_last_modified, temp_aj.cached_last_modified);
+              aj->cached_output_payload = temp_aj.cached_output_payload;
+
+              if (aj->cached_etag[0] != '\0') {
+                char *k_cache_etag = allocate_jsonv_string(arena, "_cache_etag", 11);
+                jsonv_obj_set(jsonv_arena, context_val->as.p, k_cache_etag, jsonv_val_str(allocate_jsonv_string(arena, aj->cached_etag, strlen(aj->cached_etag))));
+              }
+              if (aj->cached_last_modified[0] != '\0') {
+                char *k_cache_lm = allocate_jsonv_string(arena, "_cache_last_modified", 20);
+                jsonv_obj_set(jsonv_arena, context_val->as.p, k_cache_lm, jsonv_val_str(allocate_jsonv_string(arena, aj->cached_last_modified, strlen(aj->cached_last_modified))));
+              }
+            }
+
             aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
             char *k_steps = allocate_jsonv_string(arena, "steps", 5);
             jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
@@ -1415,7 +1869,7 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
     // Poll and read from active child processes (plugins)
     ActiveJob *aj_proc = active_jobs_head;
     while (aj_proc) {
-      if (aj_proc->plugin_exec.child_pid > 0) {
+      if (aj_proc->plugin_exec.child_pid != 0) {
         bool finished = false;
         long exit_code = 0;
         Arena *eff_arena = aj_proc->loop_arena ? aj_proc->loop_arena : arena;

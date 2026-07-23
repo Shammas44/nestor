@@ -48,6 +48,14 @@ _Avoid_: PluginContainer, IsolationHost
 A local caching subsystem employing TTL-based expiration and LRU size-capping eviction strategies.
 _Avoid_: LocalStoreCache, StateCache
 
+**DeterministicBoundary**:
+A graph validation rule forcing workflows to have exactly one start job (entry point) and joining all parallel forks before hitting any exit/return jobs.
+_Avoid_: SingleEntryPointRule, JoinedValidation
+
+**ReturnJob**:
+A dedicated job type that marks the explicit exit point of a workflow path, evaluating a deterministic outcome value.
+_Avoid_: ExitJob, EndNode
+
 ## Example Dialogue
 
 **Developer**: How do we prevent **Steps** inside a **Job** from polluting each other's output?

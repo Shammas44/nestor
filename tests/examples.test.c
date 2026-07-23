@@ -47,6 +47,8 @@ static void init() {
   transport_mock_add_response("127.0.0.1:8080/api/v1/ap-south/employees?max_age=30", "GET", 200, "{\"region\": \"ap-south\", \"employee_ids\": [\"emp_401\", \"emp_402\"]}");
   transport_mock_add_response("127.0.0.1:8080/api/v1/ap-south/employees/emp_401", "GET", 200, "{\"id\": \"emp_401\", \"name\": \"Hana Tanaka\", \"age\": 26, \"department\": \"Engineering\", \"salary\": 85000, \"region\": \"ap-south\", \"internal_notes\": \"Tokyo\"}");
   transport_mock_add_response("127.0.0.1:8080/api/v1/ap-south/employees/emp_402", "GET", 200, "{\"id\": \"emp_402\", \"name\": \"Ian Chen\", \"age\": 24, \"department\": \"Marketing\", \"salary\": 72000, \"region\": \"ap-south\", \"internal_notes\": \"Singapore\"}");
+  transport_mock_add_response("127.0.0.1:8080/api/v1/data/report", "GET", 200, "{\"status\": \"generated\", \"data\": [1,2,3]}");
+  system("mkdir -p ./plugins && gcc -O2 -shared -fPIC -Isrc/include tests/fixtures/test_dynamic_plugin.c -o ./plugins/test_dynamic_plugin.so");
   /*#endregion*/
 }
 
@@ -164,6 +166,7 @@ static Jsonv_Value run_example_test(Arena *arena, const char *filepath) {
   jsonv_obj_set(jsonv_arena, inputs_obj, allocate_jsonv_string(arena, "region"), jsonv_val_str(allocate_jsonv_string(arena, "eu")));
   jsonv_obj_set(jsonv_arena, inputs_obj, allocate_jsonv_string(arena, "val"), jsonv_val_int(1));
   jsonv_obj_set(jsonv_arena, inputs_obj, allocate_jsonv_string(arena, "index"), jsonv_val_int(0));
+  jsonv_obj_set(jsonv_arena, inputs_obj, allocate_jsonv_string(arena, "param_in"), jsonv_val_str(allocate_jsonv_string(arena, "e2e_showcase")));
 
   Jsonv_Arr *planet_arr = jsonv_arr_new(jsonv_arena);
   jsonv_arr_set(jsonv_arena, planet_arr, 0, jsonv_val_str(allocate_jsonv_string(arena, "1")));
@@ -391,6 +394,16 @@ TIMED_TEST(examples, swapi_10_coordinated_multistage_orchestration, init, fini)
   Jsonv_Value ctx = run_example_test(arena, "examples/swapi/10_coordinated_multistage_orchestration.json");
   int64_t status = get_step_status_code(arena, ctx.as.p, "final_report", "compile_results");
   cr_assert_eq(status, 0);
+  arena_destroy(arena);
+/*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(examples, showcase_advanced_features, init, fini)
+/*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/10_showcase_advanced_features.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "aggregate_and_cache", "cache_revalidated_http");
+  cr_assert_eq(status, 200);
   arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST

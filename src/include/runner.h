@@ -10,6 +10,10 @@ typedef struct {
   char *buf;
   size_t len;
   size_t cap;
+  char cache_control[256];
+  char expires[128];
+  char etag[128];
+  char last_modified[128];
 } ResponseBuffer;
 
 typedef struct Transport Transport;

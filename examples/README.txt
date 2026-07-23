@@ -1,6 +1,6 @@
 Nestor Orchestration Engine - Examples and Testing Scenarios
 
-This directory contains eighteen scenarios showing the configuration language and capabilities of the Nestor CLI execution engine.
+This directory contains nineteen scenarios showing the configuration language and capabilities of the Nestor CLI execution engine.
 
 ================================================================================
 EASY TESTING: RUN SCENARIOS VIA SHELL SCRIPT
@@ -251,6 +251,19 @@ SCENARIO 18: SWAPI Coordinated Multistage Orchestration
   cat examples/swapi/10_coordinated_multistage_orchestration.json | ./bin/main planet_ids='["1", "2"]' | jq
 - Expected Outcome:
   Runs the multistage DAG, fork-joining loop tasks and character queries successfully.
+
+================================================================================
+SCENARIO 19: Nestor Advanced Features Showcase
+================================================================================
+- File: examples/10_showcase_advanced_features.json
+- Purpose: Demonstrates inline dynamic plugins (C ABI SDK), sandboxed dynamic plugins (subprocess isolation), edge condition masks (onSuccess, onFailure, etc.), and native JSONata transform jobs.
+- Pre-requisite: Compile the dynamic plugin library:
+  mkdir -p ./plugins && gcc -O2 -shared -fPIC -Isrc/include tests/fixtures/test_dynamic_plugin.c -o ./plugins/test_dynamic_plugin.so
+- How to Run:
+  cat examples/10_showcase_advanced_features.json | ./bin/main param_in=e2e_showcase | jq
+- Expected Outcome:
+  Runs both inline and sandboxed dynamic plugin executions, synchronizes their outcomes via depends_on conditions, transforms the data using native JSONata, and triggers a cache-revalidated HTTP GET request.
+
 
 
 

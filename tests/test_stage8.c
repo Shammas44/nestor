@@ -3,6 +3,7 @@
 #include "parser.h"
 #include "compiler.h"
 #include "aho_corasick.h"
+#include "cache.h"
 #include "utils.h"
 #include "transport.h"
 #include <criterion/criterion.h>
@@ -15,7 +16,7 @@
 static void init() {
   /*#region*/
   test_init();
-  system("mkdir -p ./plugins && gcc -O2 tests/fixtures/mock_plugin.c -o ./plugins/mock_plugin");
+  system("mkdir -p ./plugins && gcc -O2 tests/fixtures/mock_plugin.c -o ./plugins/mock_plugin && gcc -O2 -shared -fPIC -Isrc/include tests/fixtures/test_dynamic_plugin.c -o ./plugins/test_dynamic_plugin.so");
   /*#endregion*/
 }
 
@@ -674,6 +675,546 @@ TIMED_TEST(stage8, mock_transport_seam, init, fini)
   cr_assert(sv_equals_cstr(msg_sv, "hello from mock"));
 
   mock_trans->ops->destroy(mock_trans);
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, conditional_execution_edge_cases, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  // Job A fails, Job B depends on A on failure (so B runs), Job C depends on A on success (so C is skipped).
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Conditional Edge Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"jobA\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"stepA\",\n"
+    "          \"http\": {\n"
+    "            \"method\": \"POST\",\n"
+    "            \"url\": \"http://127.0.0.1:8080/fail\"\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    },\n"
+    "    \"jobB\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"depends_on\": [\n"
+    "        {\n"
+    "          \"job\": \"jobA\",\n"
+    "          \"conditions\": [\"onFailure\"]\n"
+    "        }\n"
+    "      ],\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"stepB\",\n"
+    "          \"http\": {\n"
+    "            \"method\": \"POST\",\n"
+    "            \"url\": \"http://127.0.0.1:8080/success\"\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    },\n"
+    "    \"jobC\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"depends_on\": [\n"
+    "        {\n"
+    "          \"job\": \"jobA\",\n"
+    "          \"conditions\": [\"onSuccess\"]\n"
+    "        }\n"
+    "      ],\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"stepC\",\n"
+    "          \"http\": {\n"
+    "            \"method\": \"POST\",\n"
+    "            \"url\": \"http://127.0.0.1:8080/success\"\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    }\n"
+  "  }\n"
+  "}\n";
+
+  WorkflowAST ast;
+  int32_t status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  status = compile_workflow(arena, &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "env"), jsonv_val_obj(env_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  transport_mock_add_response("http://127.0.0.1:8080/fail", "POST", 500, "{\"error\": true}");
+  transport_mock_add_response("http://127.0.0.1:8080/success", "POST", 200, "{\"success\": true}");
+  Transport *mock_trans = transport_mock_new(arena);
+
+  // Since jobA fails but jobB has depends_on_conditions for onFailure, jobB runs and succeeds.
+  // jobC depends on jobA on onSuccess, so jobC is skipped.
+  int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
+  (void)run_status;
+
+  JobNode *j = ast.jobs_head;
+  bool foundA = false, foundB = false, foundC = false;
+  while (j) {
+    if (sv_equals_cstr(j->id, "jobA")) {
+      cr_assert_eq(j->execution_state, STATE_FAILED);
+      foundA = true;
+    } else if (sv_equals_cstr(j->id, "jobB")) {
+      cr_assert_eq(j->execution_state, STATE_SUCCEEDED);
+      foundB = true;
+    } else if (sv_equals_cstr(j->id, "jobC")) {
+      cr_assert_eq(j->execution_state, STATE_SKIPPED);
+      foundC = true;
+    }
+    j = j->next_sorted;
+  }
+  cr_assert(foundA && foundB && foundC);
+
+  mock_trans->ops->destroy(mock_trans);
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, native_transform_job, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Transform Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"job1\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"step1\",\n"
+    "          \"http\": {\n"
+    "            \"method\": \"POST\",\n"
+    "            \"url\": \"http://127.0.0.1:8080/data\"\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    },\n"
+    "    \"transform_job\": {\n"
+    "      \"type\": \"transform\",\n"
+    "      \"depends_on\": [\"job1\"],\n"
+    "      \"spec\": {\n"
+    "        \"expression\": \"${{ jobs.job1.steps.step1.body.sensors[status='active'].name }}\"\n"
+    "      }\n"
+    "    }\n"
+  "  }\n"
+  "}\n";
+
+  WorkflowAST ast;
+  int32_t status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  status = compile_workflow(arena, &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "env"), jsonv_val_obj(env_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  transport_mock_add_response("http://127.0.0.1:8080/data", "POST", 200, 
+    "{\"sensors\": [{\"name\": \"s1\", \"status\": \"active\"}, {\"name\": \"s2\", \"status\": \"inactive\"}]}");
+  Transport *mock_trans = transport_mock_new(arena);
+
+  int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+
+  // Assert transform_job outcome contains the transformed data
+  Jsonv_Value jobs_val;
+  cr_assert(jsonv_obj_get(context_val.as.p, "jobs", &jobs_val));
+  Jsonv_Value trans_outcome;
+  cr_assert(jsonv_obj_get(jobs_val.as.p, "transform_job", &trans_outcome));
+  Jsonv_Value outputs_val;
+  cr_assert(jsonv_obj_get(trans_outcome.as.p, "outputs", &outputs_val));
+  
+  cr_assert_eq(outputs_val.tag, JSONV_VAL_STRING);
+  StringView name_sv = { outputs_val.as.p, jsonv_val_str_len(outputs_val) };
+  cr_assert(sv_equals_cstr(name_sv, "s1"));
+
+  mock_trans->ops->destroy(mock_trans);
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, cache_hit_and_ttl_eviction, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  // Initialize Cache
+  unlink(".test_cache_hit.db");
+  int32_t rc = cache_init(".test_cache_hit.db", 10);
+  cr_assert_eq(rc, ERR_SUCCESS);
+
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Cache Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"cache_job\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"cache_step\",\n"
+    "          \"http\": {\n"
+    "            \"method\": \"POST\",\n"
+    "            \"url\": \"http://127.0.0.1:8080/cache_url\"\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+
+  WorkflowAST ast;
+  int32_t parse_status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_status, ERR_SUCCESS);
+
+  int32_t compile_status = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_status, ERR_SUCCESS);
+
+  Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "env"), jsonv_val_obj(env_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  // First execution: cache miss, mock transport returns result
+  transport_mock_clear();
+  transport_mock_add_response("http://127.0.0.1:8080/cache_url", "POST", 200, "{\"val\": 42}");
+  transport_mock_add_header("http://127.0.0.1:8080/cache_url", "POST", "Cache-Control", "max-age=3600");
+
+  Transport *mock_trans = transport_mock_new(arena);
+  int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+  mock_trans->ops->destroy(mock_trans);
+
+  // Retrieve outcome and verify
+  Jsonv_Value jobs_val;
+  cr_assert(jsonv_obj_get(context_val.as.p, "jobs", &jobs_val));
+  Jsonv_Value cache_job_outcome;
+  cr_assert(jsonv_obj_get(jobs_val.as.p, "cache_job", &cache_job_outcome));
+  Jsonv_Value steps_val;
+  cr_assert(jsonv_obj_get(cache_job_outcome.as.p, "steps", &steps_val));
+  Jsonv_Value step_outcome;
+  cr_assert(jsonv_obj_get(steps_val.as.p, "cache_step", &step_outcome));
+  Jsonv_Value body_val;
+  cr_assert(jsonv_obj_get(step_outcome.as.p, "body", &body_val));
+  cr_assert_eq(body_val.tag, JSONV_VAL_OBJ);
+  Jsonv_Value val_prop;
+  cr_assert(jsonv_obj_get(body_val.as.p, "val", &val_prop));
+  cr_assert_eq(val_prop.as.i, 42);
+
+  // Reset AST and Context for second execution
+  ast.jobs_head->execution_state = STATE_PENDING;
+  ast.jobs_head->dependency_count = 0;
+  Jsonv_Obj *root_obj2 = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj2, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL)));
+  jsonv_obj_set(jsonv_arena, root_obj2, allocate_jsonv_string(arena, "env"), jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL)));
+  Jsonv_Value context_val2 = jsonv_val_obj(root_obj2);
+
+  // Second execution: cache hit! Clear mock transport
+  transport_mock_clear();
+  Transport *mock_trans2 = transport_mock_new(arena);
+  run_status = run_workflow_opt(arena, &ast, &context_val2, mock_trans2);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+  mock_trans2->ops->destroy(mock_trans2);
+
+  // Verify same value retrieved from cache
+  Jsonv_Value jobs_val2;
+  cr_assert(jsonv_obj_get(context_val2.as.p, "jobs", &jobs_val2));
+  Jsonv_Value cache_job_outcome2;
+  cr_assert(jsonv_obj_get(jobs_val2.as.p, "cache_job", &cache_job_outcome2));
+  Jsonv_Value steps_val2;
+  cr_assert(jsonv_obj_get(cache_job_outcome2.as.p, "steps", &steps_val2));
+  Jsonv_Value step_outcome2;
+  cr_assert(jsonv_obj_get(steps_val2.as.p, "cache_step", &step_outcome2));
+  Jsonv_Value body_val2;
+  cr_assert(jsonv_obj_get(step_outcome2.as.p, "body", &body_val2));
+  cr_assert_eq(body_val2.tag, JSONV_VAL_OBJ);
+  Jsonv_Value val_prop2;
+  cr_assert(jsonv_obj_get(body_val2.as.p, "val", &val_prop2));
+  cr_assert_eq(val_prop2.as.i, 42);
+
+  // Clean up
+  cache_close();
+  unlink(".test_cache_hit.db");
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, cache_304_validation, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  // Initialize Cache
+  unlink(".test_cache_304.db");
+  int32_t rc = cache_init(".test_cache_304.db", 10);
+  cr_assert_eq(rc, ERR_SUCCESS);
+
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Cache 304 Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"cache_job\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"cache_step\",\n"
+    "          \"http\": {\n"
+    "            \"method\": \"POST\",\n"
+    "            \"url\": \"http://127.0.0.1:8080/cache_url\"\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+
+  WorkflowAST ast;
+  int32_t parse_status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_status, ERR_SUCCESS);
+
+  int32_t compile_status = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_status, ERR_SUCCESS);
+
+  Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "env"), jsonv_val_obj(env_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  // First execution: Cache-Control: no-cache, ETag: "tag-123"
+  transport_mock_clear();
+  transport_mock_add_response("http://127.0.0.1:8080/cache_url", "POST", 200, "{\"val\": 100}");
+  transport_mock_add_header("http://127.0.0.1:8080/cache_url", "POST", "Cache-Control", "no-cache");
+  transport_mock_add_header("http://127.0.0.1:8080/cache_url", "POST", "ETag", "tag-123");
+
+  Transport *mock_trans = transport_mock_new(arena);
+  int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+  mock_trans->ops->destroy(mock_trans);
+
+  // Reset AST and Context for second execution
+  ast.jobs_head->execution_state = STATE_PENDING;
+  ast.jobs_head->dependency_count = 0;
+  Jsonv_Obj *root_obj2 = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj2, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL)));
+  jsonv_obj_set(jsonv_arena, root_obj2, allocate_jsonv_string(arena, "env"), jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL)));
+  Jsonv_Value context_val2 = jsonv_val_obj(root_obj2);
+
+  // Second execution: stale entry, validate with ETag, server returns 304
+  transport_mock_clear();
+  transport_mock_add_response("http://127.0.0.1:8080/cache_url", "POST", 304, "");
+
+  Transport *mock_trans2 = transport_mock_new(arena);
+  run_status = run_workflow_opt(arena, &ast, &context_val2, mock_trans2);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+  mock_trans2->ops->destroy(mock_trans2);
+
+  // Verify cached body was restored successfully
+  Jsonv_Value jobs_val2;
+  cr_assert(jsonv_obj_get(context_val2.as.p, "jobs", &jobs_val2));
+  Jsonv_Value cache_job_outcome2;
+  cr_assert(jsonv_obj_get(jobs_val2.as.p, "cache_job", &cache_job_outcome2));
+  Jsonv_Value steps_val2;
+  cr_assert(jsonv_obj_get(cache_job_outcome2.as.p, "steps", &steps_val2));
+  Jsonv_Value step_outcome2;
+  cr_assert(jsonv_obj_get(steps_val2.as.p, "cache_step", &step_outcome2));
+  Jsonv_Value body_val2;
+  cr_assert(jsonv_obj_get(step_outcome2.as.p, "body", &body_val2));
+  cr_assert_eq(body_val2.tag, JSONV_VAL_OBJ);
+  Jsonv_Value val_prop2;
+  cr_assert(jsonv_obj_get(body_val2.as.p, "val", &val_prop2));
+  cr_assert_eq(val_prop2.as.i, 100);
+
+  // Clean up
+  cache_close();
+  unlink(".test_cache_304.db");
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, dynamic_plugin_trusted_in_process, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Dynamic Plugin Trusted Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"plugin_job\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"run_plugin\",\n"
+    "          \"uses\": \"./plugins/test_dynamic_plugin.so\",\n"
+    "          \"sandboxed\": false,\n"
+    "          \"with\": {\n"
+    "            \"dummy\": \"unused\"\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+
+  WorkflowAST ast;
+  int32_t parse_status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_status, ERR_SUCCESS);
+
+  int32_t compile_status = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_status, ERR_SUCCESS);
+
+  Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  jsonv_obj_set(jsonv_arena, inputs_obj, allocate_jsonv_string(arena, "param_in"), jsonv_val_str(allocate_jsonv_string(arena, "hello_world")));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "env"), jsonv_val_obj(env_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  Transport *mock_trans = transport_mock_new(arena);
+  int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+  mock_trans->ops->destroy(mock_trans);
+
+  // Assert step outcome matches mocked body and status
+  Jsonv_Value jobs_val;
+  cr_assert(jsonv_obj_get(context_val.as.p, "jobs", &jobs_val));
+  Jsonv_Value job_outcome;
+  cr_assert(jsonv_obj_get(jobs_val.as.p, "plugin_job", &job_outcome));
+  Jsonv_Value steps_val;
+  cr_assert(jsonv_obj_get(job_outcome.as.p, "steps", &steps_val));
+  Jsonv_Value step_outcome;
+  cr_assert(jsonv_obj_get(steps_val.as.p, "run_plugin", &step_outcome));
+
+  Jsonv_Value outputs_val;
+  cr_assert(jsonv_obj_get(step_outcome.as.p, "outputs", &outputs_val));
+  cr_assert_eq(outputs_val.tag, JSONV_VAL_OBJ);
+
+  Jsonv_Value status_prop;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "status", &status_prop));
+  cr_assert_eq(status_prop.tag, JSONV_VAL_STRING);
+  cr_assert(sv_equals_cstr((StringView){ status_prop.as.p, jsonv_val_str_len(status_prop) }, "success"));
+
+  Jsonv_Value val_prop;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "computed_val", &val_prop));
+  cr_assert_eq(val_prop.tag, JSONV_VAL_STRING);
+  cr_assert(sv_equals_cstr((StringView){ val_prop.as.p, jsonv_val_str_len(val_prop) }, "Processed: hello_world"));
+
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, dynamic_plugin_sandboxed_subprocess, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Dynamic Plugin Sandboxed Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"plugin_job\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"run_plugin\",\n"
+    "          \"uses\": \"./plugins/test_dynamic_plugin.so\",\n"
+    "          \"sandboxed\": true,\n"
+    "          \"with\": {\n"
+    "            \"dummy\": \"unused\"\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+
+  WorkflowAST ast;
+  int32_t parse_status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_status, ERR_SUCCESS);
+
+  int32_t compile_status = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_status, ERR_SUCCESS);
+
+  Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  jsonv_obj_set(jsonv_arena, inputs_obj, allocate_jsonv_string(arena, "param_in"), jsonv_val_str(allocate_jsonv_string(arena, "hello_sandbox")));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "env"), jsonv_val_obj(env_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  Transport *mock_trans = transport_mock_new(arena);
+  int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+  mock_trans->ops->destroy(mock_trans);
+
+  // Assert step outcome matches mocked body and status
+  Jsonv_Value jobs_val;
+  cr_assert(jsonv_obj_get(context_val.as.p, "jobs", &jobs_val));
+  Jsonv_Value job_outcome;
+  cr_assert(jsonv_obj_get(jobs_val.as.p, "plugin_job", &job_outcome));
+  Jsonv_Value steps_val;
+  cr_assert(jsonv_obj_get(job_outcome.as.p, "steps", &steps_val));
+  Jsonv_Value step_outcome;
+  cr_assert(jsonv_obj_get(steps_val.as.p, "run_plugin", &step_outcome));
+
+  Jsonv_Value outputs_val;
+  cr_assert(jsonv_obj_get(step_outcome.as.p, "outputs", &outputs_val));
+  cr_assert_eq(outputs_val.tag, JSONV_VAL_OBJ);
+
+  Jsonv_Value status_prop;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "status", &status_prop));
+  cr_assert_eq(status_prop.tag, JSONV_VAL_STRING);
+  cr_assert(sv_equals_cstr((StringView){ status_prop.as.p, jsonv_val_str_len(status_prop) }, "success"));
+
+  Jsonv_Value val_prop;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "computed_val", &val_prop));
+  cr_assert_eq(val_prop.tag, JSONV_VAL_STRING);
+  cr_assert(sv_equals_cstr((StringView){ val_prop.as.p, jsonv_val_str_len(val_prop) }, "Processed: hello_sandbox"));
+
   arena_destroy(arena);
   /*#endregion*/
 END_TIMED_TEST

@@ -272,6 +272,9 @@ Resilience is defined per job.
 - **API Timeout Violations:** If a `wait_signal` node exceeds its timeout configuration, the engine abandons the wait, flags the node as `TIMED_OUT`, and triggers failure compensation paths.
 - **Process Interruption (Server Mode):** On `SIGTERM`, running tasks release database locks. The coordinator reassigns them upon reboot, respecting idempotency constraints.
 - **Process Interruption (CLI Mode):** Execution drops immediately. No state is saved.
+- **Single Entry Point (Root Validation):** A workflow must have exactly one start job. This can be explicitly declared via `"start": true` on a job, or implicitly inferred if only one root node exists. Having multiple start jobs or un-resolvable root paths triggers a compilation error.
+- **Joined Concurrency (Join Dominance):** If parallel branches are spawned using a `fork` job, all branches of that fork must be synchronized by a `join` job before reaching any exit job (marked `"end": true` or `"return"`) to avoid dangling process race conditions.
+- **Deterministic Exit Nodes:** Any job node can be marked as an exit using `"end": true` (returns the job's outcomes) or `"return": <expression>` (evaluates and returns a custom mapped outcome), immediately terminating the workflow.
 
 ---
 

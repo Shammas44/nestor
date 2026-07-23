@@ -11,6 +11,51 @@
 
 void *na_alloc(Arena *arena, size_t size);
 
+typedef struct {
+  struct curl_slist *req_headers;
+  char cache_control[256];
+  char expires[128];
+  char etag[128];
+  char last_modified[128];
+} CurlRequestState;
+
+static size_t my_header_callback(char *buffer, size_t size, size_t nitems, void *userdata) {
+  /*#region*/
+  size_t total = size * nitems;
+  CurlRequestState *state = (CurlRequestState *)userdata;
+  if (!state) return total;
+
+  char line[512];
+  size_t copy_len = total < sizeof(line) - 1 ? total : sizeof(line) - 1;
+  memcpy(line, buffer, copy_len);
+  line[copy_len] = '\0';
+
+  char *colon = strchr(line, ':');
+  if (colon) {
+    *colon = '\0';
+    char *name = line;
+    char *value = colon + 1;
+    while (*name == ' ' || *name == '\t') name++;
+    while (*value == ' ' || *value == '\t' || *value == '\r' || *value == '\n') value++;
+    char *end = name + strlen(name) - 1;
+    while (end >= name && (*end == ' ' || *end == '\t')) *end-- = '\0';
+    end = value + strlen(value) - 1;
+    while (end >= value && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) *end-- = '\0';
+
+    if (strcasecmp(name, "Cache-Control") == 0) {
+      strncpy(state->cache_control, value, sizeof(state->cache_control) - 1);
+    } else if (strcasecmp(name, "Expires") == 0) {
+      strncpy(state->expires, value, sizeof(state->expires) - 1);
+    } else if (strcasecmp(name, "ETag") == 0) {
+      strncpy(state->etag, value, sizeof(state->etag) - 1);
+    } else if (strcasecmp(name, "Last-Modified") == 0) {
+      strncpy(state->last_modified, value, sizeof(state->last_modified) - 1);
+    }
+  }
+  return total;
+  /*#endregion*/
+}
+
 static size_t my_transport_curl_write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
   /*#region*/
   size_t realsize = size * nmemb;
@@ -75,6 +120,15 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
   CurlTransportData *data = (CurlTransportData *)t->impl_data;
   CURL *curl = curl_easy_init();
   if (!curl) return ERR_HTTP_TRANSPORT;
+
+  CurlRequestState *req_state = na_alloc(arena, sizeof(CurlRequestState));
+  if (!req_state) {
+    curl_easy_cleanup(curl);
+    return ERR_OOM;
+  }
+  memset(req_state, 0, sizeof(CurlRequestState));
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, my_header_callback);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)req_state);
 
   StringView resolved_url = {NULL, 0};
   int32_t status = resolve_string(arena, step->http.url, jsonv_arena, context_val, &resolved_url);
@@ -144,9 +198,32 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
   if (!has_content_type && step->http.body.tag != JSONV_VAL_UNDEFINED) {
     header_list = curl_slist_append(header_list, "Content-Type: application/json");
   }
+
+  Jsonv_Value cache_etag_val;
+  if (jsonv_obj_get(context_val.as.p, "_cache_etag", &cache_etag_val) && cache_etag_val.tag == JSONV_VAL_STRING) {
+    char *etag_str = (char *)cache_etag_val.as.p;
+    size_t req_len = strlen("If-None-Match: ") + strlen(etag_str) + 1;
+    char *h = na_alloc(arena, req_len);
+    if (h) {
+      snprintf(h, req_len, "If-None-Match: %s", etag_str);
+      header_list = curl_slist_append(header_list, h);
+    }
+  }
+  Jsonv_Value cache_lm_val;
+  if (jsonv_obj_get(context_val.as.p, "_cache_last_modified", &cache_lm_val) && cache_lm_val.tag == JSONV_VAL_STRING) {
+    char *lm_str = (char *)cache_lm_val.as.p;
+    size_t req_len = strlen("If-Modified-Since: ") + strlen(lm_str) + 1;
+    char *h = na_alloc(arena, req_len);
+    if (h) {
+      snprintf(h, req_len, "If-Modified-Since: %s", lm_str);
+      header_list = curl_slist_append(header_list, h);
+    }
+  }
+
   if (header_list) {
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
   }
+  req_state->req_headers = header_list;
 
   if (step->http.body.tag != JSONV_VAL_UNDEFINED) {
     Jsonv_Value resolved_body = resolve_json_value(arena, step->http.body, jsonv_arena, context_val);
@@ -180,7 +257,7 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, my_transport_curl_write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)resp_buf);
 
-  curl_easy_setopt(curl, CURLOPT_PRIVATE, (void *)header_list);
+  curl_easy_setopt(curl, CURLOPT_PRIVATE, (void *)req_state);
 
   curl_multi_add_handle(data->multi_handle, curl);
   *handle_out = curl;
@@ -216,7 +293,6 @@ static int32_t curl_check_completed(Transport *t, Arena *arena, Jsonv_Arena *jso
   /*#region*/
   (void)arena;
   (void)jsonv_arena;
-  (void)resp_buf;
   CurlTransportData *data = (CurlTransportData *)t->impl_data;
   *completed = false;
   *error = false;
@@ -226,6 +302,19 @@ static int32_t curl_check_completed(Transport *t, Arena *arena, Jsonv_Arena *jso
       *status_code = data->completed[i].status_code;
       *error = data->completed[i].error;
       *completed = true;
+
+      CurlRequestState *req_state = NULL;
+      curl_easy_getinfo(easy_handle, CURLINFO_PRIVATE, &req_state);
+      if (req_state && resp_buf) {
+        strncpy(resp_buf->cache_control, req_state->cache_control, sizeof(resp_buf->cache_control) - 1);
+        resp_buf->cache_control[sizeof(resp_buf->cache_control) - 1] = '\0';
+        strncpy(resp_buf->expires, req_state->expires, sizeof(resp_buf->expires) - 1);
+        resp_buf->expires[sizeof(resp_buf->expires) - 1] = '\0';
+        strncpy(resp_buf->etag, req_state->etag, sizeof(resp_buf->etag) - 1);
+        resp_buf->etag[sizeof(resp_buf->etag) - 1] = '\0';
+        strncpy(resp_buf->last_modified, req_state->last_modified, sizeof(resp_buf->last_modified) - 1);
+        resp_buf->last_modified[sizeof(resp_buf->last_modified) - 1] = '\0';
+      }
 
       // Remove from completed array by shifting
       for (int j = i; j < data->completed_count - 1; j++) {
@@ -243,10 +332,10 @@ static void curl_cleanup_request(Transport *t, void *easy_handle) {
   /*#region*/
   CurlTransportData *data = (CurlTransportData *)t->impl_data;
   if (easy_handle) {
-    struct curl_slist *header_list = NULL;
-    curl_easy_getinfo(easy_handle, CURLINFO_PRIVATE, &header_list);
-    if (header_list) {
-      curl_slist_free_all(header_list);
+    CurlRequestState *req_state = NULL;
+    curl_easy_getinfo(easy_handle, CURLINFO_PRIVATE, &req_state);
+    if (req_state && req_state->req_headers) {
+      curl_slist_free_all(req_state->req_headers);
     }
     curl_multi_remove_handle(data->multi_handle, easy_handle);
     curl_easy_cleanup(easy_handle);
@@ -280,6 +369,9 @@ struct MockResponseEntry {
   char method[16];
   long status_code;
   char body[4096];
+  char cache_control[256];
+  char etag[128];
+  char last_modified[128];
   MockResponseEntry *next;
 };
 
@@ -302,12 +394,35 @@ void transport_mock_add_response(const char *url, const char *method, long statu
   } else {
     return;
   }
+  memset(entry, 0, sizeof(MockResponseEntry));
   strncpy(entry->url, url, sizeof(entry->url) - 1);
   strncpy(entry->method, method, sizeof(entry->method) - 1);
   entry->status_code = status_code;
   strncpy(entry->body, body, sizeof(entry->body) - 1);
   entry->next = mock_responses_head;
   mock_responses_head = entry;
+  /*#endregion*/
+}
+
+void transport_mock_add_header(const char *url, const char *method, const char *key, const char *value) {
+  /*#region*/
+  MockResponseEntry *curr = mock_responses_head;
+  while (curr) {
+    if (strstr(url, curr->url) && strcmp(curr->method, method) == 0) {
+      if (strcasecmp(key, "Cache-Control") == 0) {
+        strncpy(curr->cache_control, value, sizeof(curr->cache_control) - 1);
+        curr->cache_control[sizeof(curr->cache_control) - 1] = '\0';
+      } else if (strcasecmp(key, "ETag") == 0) {
+        strncpy(curr->etag, value, sizeof(curr->etag) - 1);
+        curr->etag[sizeof(curr->etag) - 1] = '\0';
+      } else if (strcasecmp(key, "Last-Modified") == 0) {
+        strncpy(curr->last_modified, value, sizeof(curr->last_modified) - 1);
+        curr->last_modified[sizeof(curr->last_modified) - 1] = '\0';
+      }
+      break;
+    }
+    curr = curr->next;
+  }
   /*#endregion*/
 }
 
@@ -335,6 +450,12 @@ static int32_t mock_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
   if (match) {
     state->status_code = match->status_code;
     state->body = match->body;
+    strncpy(resp_buf->cache_control, match->cache_control, sizeof(resp_buf->cache_control) - 1);
+    resp_buf->cache_control[sizeof(resp_buf->cache_control) - 1] = '\0';
+    strncpy(resp_buf->etag, match->etag, sizeof(resp_buf->etag) - 1);
+    resp_buf->etag[sizeof(resp_buf->etag) - 1] = '\0';
+    strncpy(resp_buf->last_modified, match->last_modified, sizeof(resp_buf->last_modified) - 1);
+    resp_buf->last_modified[sizeof(resp_buf->last_modified) - 1] = '\0';
   } else {
     state->status_code = 404;
     state->body = "{\"error\": \"not found\"}";

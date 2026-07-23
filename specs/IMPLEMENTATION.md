@@ -159,6 +159,11 @@ struct JobNode {
     // Bitwise state tracking
     uint8_t execution_state; // PENDING, RUNNING, SUCCEEDED, FAILED, SKIPPED, SUSPENDED
 
+    // Boundary configuration properties
+    bool is_start;
+    bool is_end;
+    StringView return_expr;
+
     union {
         struct {
             struct StepNode* steps_head; // Intrusive step linked list

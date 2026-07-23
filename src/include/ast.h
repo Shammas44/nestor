@@ -10,6 +10,11 @@ typedef struct {
   StringView value;
 } EnvVarAST;
 
+#define DEP_COND_SUCCESS    (1 << 0)
+#define DEP_COND_FAILURE    (1 << 1)
+#define DEP_COND_SKIP       (1 << 2)
+#define DEP_COND_COMPLETION (DEP_COND_SUCCESS | DEP_COND_FAILURE | DEP_COND_SKIP)
+
 typedef enum {
   NODE_TASK,
   NODE_IF,
@@ -18,7 +23,8 @@ typedef enum {
   NODE_JOIN,
   NODE_LOOP,
   NODE_WAIT_SIGNAL,
-  NODE_WAIT_TIMER
+  NODE_WAIT_TIMER,
+  NODE_TRANSFORM
 } NodeType;
 
 typedef enum {
@@ -50,6 +56,7 @@ struct StepNode {
   struct {
     StringView uses;
     Jsonv_Value with_args;
+    bool sandboxed;
   } plugin;
 
   StepNode *next;
@@ -73,6 +80,7 @@ struct JobNode {
   JobNode *next_sorted;
   JobNode **depends_on_nodes;  // Resolved upstream dependency node pointers
   StringView *depends_on_ids;  // Raw upstream dependency IDs
+  uint8_t *depends_on_conditions; // Bitmask array for dependency conditions
   size_t dependency_count;
 
   // Bitwise/byte execution state tracking
@@ -125,6 +133,10 @@ struct JobNode {
     struct {
       StringView duration;
     } wait_timer;
+
+    struct {
+      StringView expression;
+    } transform;
   } spec;
 };
 

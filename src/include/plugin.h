@@ -19,6 +19,7 @@ struct PluginExecutor {
   long child_timeout_ms;
   struct timeval child_start_time;
   char *temp_in_path;
+  long in_process_exit_code;
 };
 
 int32_t plugin_start(PluginExecutor *pe, Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value context_val, StepNode *step);

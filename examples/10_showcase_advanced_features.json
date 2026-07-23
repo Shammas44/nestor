@@ -1,0 +1,87 @@
+{
+  "version": "2.0.0",
+  "name": "Nestor Advanced Features Showcase",
+  "on": { "manual": {} },
+  "jobs": {
+    "trusted_plugin_execution": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "run_inline",
+          "uses": "test_dynamic_plugin",
+          "sandboxed": false,
+          "with": {
+            "dummy_arg": "inline_mode"
+          }
+        }
+      ]
+    },
+    "sandboxed_plugin_execution": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "run_sandboxed",
+          "uses": "test_dynamic_plugin",
+          "sandboxed": true,
+          "with": {
+            "dummy_arg": "sandbox_mode"
+          }
+        }
+      ]
+    },
+    "edge_conditional_check": {
+      "type": "if",
+      "depends_on": [
+        {
+          "job": "trusted_plugin_execution",
+          "conditions": ["onSuccess", "onCompletion"]
+        },
+        {
+          "job": "sandboxed_plugin_execution",
+          "conditions": ["onSuccess", "onFailure"]
+        }
+      ],
+      "condition": "${{ jobs.trusted_plugin_execution.steps.run_inline.outputs.status = 'success' }}",
+      "then": ["format_plugin_data"],
+      "else": ["handle_failures"]
+    },
+    "format_plugin_data": {
+      "type": "transform",
+      "spec": {
+        "expression": "${{ 'Formatted: ' & jobs.sandboxed_plugin_execution.steps.run_sandboxed.outputs.computed_val }}"
+      }
+    },
+    "aggregate_and_cache": {
+      "type": "task",
+      "depends_on": ["format_plugin_data"],
+      "steps": [
+        {
+          "id": "cache_revalidated_http",
+          "http": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8080/api/v1/data/report",
+            "headers": {
+              "Cache-Control": "max-age=3600, no-cache",
+              "X-Sandbox-Result": "${{ jobs.format_plugin_data.result }}"
+            }
+          }
+        }
+      ]
+    },
+    "handle_failures": {
+      "type": "task",
+      "steps": [
+        {
+          "id": "fallback_alert",
+          "http": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/api/v1/alerts",
+            "body": {
+              "alert": "Dynamic execution or sandboxed pipeline has failed revalidation checks"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

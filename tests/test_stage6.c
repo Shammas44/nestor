@@ -497,6 +497,14 @@ TIMED_TEST(stage6, join_node_strategies, init, fini)
   Jsonv_Value context_val = jsonv_val_obj(root_obj);
 
   int32_t run_status = run_workflow(arena, &ast, &context_val);
+  if (run_status != ERR_SUCCESS) {
+    printf("DEBUG: run_status = %d\n", run_status);
+    JobNode *j = ast.jobs_head;
+    while (j) {
+      printf("DEBUG: JOB %.*s: state=%d\n", (int)j->id.length, j->id.data, j->execution_state);
+      j = j->next_sorted;
+    }
+  }
   cr_assert_eq(run_status, ERR_SUCCESS);
 
   assert_job_state(&ast, "start_job", STATE_SUCCEEDED);

@@ -1,5 +1,6 @@
 #include "nestor.h"
 #include "parser.h"
+#include "cache.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +22,7 @@ static char *allocate_jsonv_string(Arena *arena, const char *str) {
   /*#endregion*/
 }
 
-static void print_jsonv_value(Jsonv_Value v) {
+void print_jsonv_value(Jsonv_Value v) {
   /*#region*/
   switch (v.tag) {
     case JSONV_VAL_UNDEFINED:
@@ -125,6 +126,11 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Initialize Cache
+  if (cache_init(".nestor_cache.db", 1000) != ERR_SUCCESS) {
+    fprintf(stderr, "Warning: Failed to initialize SQLite cache database\n");
+  }
+
   // 2. Read workflow definition from standard input
   size_t yaml_len = 0;
   char *yaml = read_stdin(arena, &yaml_len);
@@ -218,44 +224,27 @@ int main(int argc, char **argv) {
   int32_t run_status = run_workflow(arena, &ast, &context_val);
   if (run_status != ERR_SUCCESS) {
     fprintf(stderr, "Runtime Error: Workflow execution failed with code %d\n", run_status);
+    cache_close();
     arena_destroy(arena);
     return 1;
   }
 
-  // 6. Print steps outcomes in JSON format
-  Jsonv_Value steps_val;
-  if (jsonv_obj_get(root_obj, allocate_jsonv_string(arena, "steps"), &steps_val)) {
-    // Convert outcomes to a readable string format
-    Jsonv_Context *out_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
-    if (out_ctx) {
-      // Print the steps outcomes object
-      printf("{\n  \"status\": \"success\",\n  \"steps\": {\n");
-      int steps_len = jsonv_obj_length(steps_val.as.p);
-      for (int i = 0; i < steps_len; i++) {
-        const char *step_id = jsonv_obj_key_at(steps_val.as.p, i);
-        Jsonv_Value outcome = jsonv_obj_val_at(steps_val.as.p, i);
-        Jsonv_Value status_code_val;
-        Jsonv_Value body_val;
-        jsonv_obj_get(outcome.as.p, allocate_jsonv_string(arena, "status_code"), &status_code_val);
-        jsonv_obj_get(outcome.as.p, allocate_jsonv_string(arena, "body"), &body_val);
+  // 6. Print clean execution context outcomes (jobs, steps, status)
+  Jsonv_Obj *clean_obj = jsonv_obj_new(jsonv_arena, NULL);
 
-        printf("    \"%.*s\": {\n      \"status_code\": %lld,\n", 
-               (int)jsonv_val_str_len(jsonv_val_str(step_id)), step_id, status_code_val.as.i);
-        
-        printf("      \"body\": ");
-        print_jsonv_value(body_val);
-        printf("\n    }");
-
-        if (i < steps_len - 1) {
-          printf(",\n");
-        } else {
-          printf("\n");
-        }
-      }
-      printf("  }\n}\n");
-    }
+  Jsonv_Value jobs_val;
+  if (jsonv_obj_get(root_obj, allocate_jsonv_string(arena, "jobs"), &jobs_val)) {
+    jsonv_obj_set(jsonv_arena, clean_obj, allocate_jsonv_string(arena, "jobs"), jobs_val);
   }
 
+  jsonv_obj_set(jsonv_arena, clean_obj, allocate_jsonv_string(arena, "status"), jsonv_val_str(allocate_jsonv_string(arena, "success")));
+
+  char *json_out = NULL;
+  if (serialize_jsonv_value(arena, jsonv_val_obj(clean_obj), &json_out) == ERR_SUCCESS) {
+    printf("%s\n", json_out);
+  }
+
+  cache_close();
   arena_destroy(arena);
   return 0;
   /*#endregion*/

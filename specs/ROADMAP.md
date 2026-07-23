@@ -398,6 +398,27 @@ Load a dynamic library plugin in-process. Verify it queries variables and return
 
 ---
 
+### Stage 8.12: Deterministic Graph Boundaries Validation
+
+#### Objective
+Enforce graph execution safety with single entry points, joined concurrency verification, job-property boundaries, and safe output serialization.
+
+#### Files & Structures
+- `src/comm/struct/compiler.c`
+- `src/comm/struct/runner.c`
+- `main.c`
+
+#### Detailed Steps
+1. Add a single entry point constraint in the DAG compiler. Ensure that exactly one starting job exists (either inferred or explicitly set via `"start": true`), else compilation fails.
+2. Implement join dominance verification tracing all paths from `fork` nodes to verify they converge at a `join` node before hitting any exit nodes (marked `"end": true` or `"return"`).
+3. Implement `end` and `return` job properties to mark explicit exits, immediately stop execution, and return the evaluated outcome value.
+4. Update the stdout printer to serialize only the clean workflow outcomes (`jobs`, `status`), redacting sensitive data.
+
+#### E2E Verification
+Run validation checks on graphs with multiple entry points or unjoined forks and verify they fail compilation. Execute valid return/end jobs on conditional branches and verify only the expected outcome is printed on stdout.
+
+---
+
 
 ## 4. Phase 2: Long-Lived Workflows (Stateful Server)
 

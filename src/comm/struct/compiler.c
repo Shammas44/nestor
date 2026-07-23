@@ -55,6 +55,11 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
     step->plugin.uses.data = step_uses.as.p;
     step->plugin.uses.length = jsonv_val_str_len(step_uses);
     jsonv_obj_get(step_val.as.p, "with", &step->plugin.with_args);
+    Jsonv_Value v_sandboxed;
+    step->plugin.sandboxed = false;
+    if (jsonv_obj_get(step_val.as.p, "sandboxed", &v_sandboxed) && v_sandboxed.tag == JSONV_VAL_BOOLEAN) {
+      step->plugin.sandboxed = v_sandboxed.as.boolean;
+    }
     Jsonv_Value v_timeout;
     if (jsonv_obj_get(step_val.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
       step->timeout.data = v_timeout.as.p;
@@ -402,6 +407,23 @@ static int32_t compile_wait_timer_spec(JobNode *job, Jsonv_Value job_spec_val) {
   /*#endregion*/
 }
 
+static int32_t compile_transform_spec(Arena *arena, JobNode *job, Jsonv_Value job_spec_val) {
+  /*#region*/
+  (void)arena;
+  Jsonv_Value v_spec;
+  if (!jsonv_obj_get(job_spec_val.as.p, "spec", &v_spec) || v_spec.tag != JSONV_VAL_OBJ) {
+    return ERR_MISSING_VAR;
+  }
+  Jsonv_Value v_expr;
+  if (!jsonv_obj_get(v_spec.as.p, "expression", &v_expr) || v_expr.tag != JSONV_VAL_STRING) {
+    return ERR_MISSING_VAR;
+  }
+  job->spec.transform.expression.data = v_expr.as.p;
+  job->spec.transform.expression.length = jsonv_val_str_len(v_expr);
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
 static int32_t inject_implicit_dependencies(Arena *arena, JobNode **job_nodes, int job_count) {
   /*#region*/
   for (int i = 0; i < job_count; i++) {
@@ -416,21 +438,29 @@ static int32_t inject_implicit_dependencies(Arena *arena, JobNode **job_nodes, i
       size_t total_count = v->dependency_count + implicit_count;
       StringView *new_ids = na_alloc(arena, total_count * sizeof(StringView));
       JobNode **new_nodes = na_alloc(arena, total_count * sizeof(JobNode *));
-      if (!new_ids || !new_nodes) return ERR_OOM;
+      uint8_t *new_conditions = na_alloc(arena, total_count * sizeof(uint8_t));
+      if (!new_ids || !new_nodes || !new_conditions) return ERR_OOM;
       if (v->dependency_count > 0) {
         memcpy(new_ids, v->depends_on_ids, v->dependency_count * sizeof(StringView));
         memcpy(new_nodes, v->depends_on_nodes, v->dependency_count * sizeof(JobNode *));
+        if (v->depends_on_conditions) {
+          memcpy(new_conditions, v->depends_on_conditions, v->dependency_count * sizeof(uint8_t));
+        } else {
+          memset(new_conditions, DEP_COND_SUCCESS, v->dependency_count * sizeof(uint8_t));
+        }
       }
       size_t idx = v->dependency_count;
       for (int j = 0; j < job_count; j++) {
         if (i != j && job_targets_id(job_nodes[j], v->id)) {
           new_ids[idx] = job_nodes[j]->id;
           new_nodes[idx] = NULL;
+          new_conditions[idx] = DEP_COND_SUCCESS;
           idx++;
         }
       }
       v->depends_on_ids = new_ids;
       v->depends_on_nodes = new_nodes;
+      v->depends_on_conditions = new_conditions;
       v->dependency_count = total_count;
     }
   }
@@ -578,6 +608,7 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
       else if (sv_equals_cstr(type_sv, "loop")) type = NODE_LOOP;
       else if (sv_equals_cstr(type_sv, "wait_signal")) type = NODE_WAIT_SIGNAL;
       else if (sv_equals_cstr(type_sv, "wait_timer")) type = NODE_WAIT_TIMER;
+      else if (sv_equals_cstr(type_sv, "transform")) type = NODE_TRANSFORM;
       else return ERR_MISSING_VAR; // Unknown node type
     }
     job->type = type;
@@ -594,32 +625,142 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
     // Extract depends_on
     Jsonv_Value v_dep;
     if (jsonv_obj_get(job_spec_val.as.p, "depends_on", &v_dep)) {
+      bool has_object_dep = false;
+      if (v_dep.tag == JSONV_VAL_ARRAY) {
+        int dep_count = jsonv_arr_length(v_dep.as.p);
+        for (int d = 0; d < dep_count; d++) {
+          if (jsonv_arr_val_at(v_dep.as.p, d).tag == JSONV_VAL_OBJ) {
+            has_object_dep = true;
+            break;
+          }
+        }
+      } else if (v_dep.tag == JSONV_VAL_OBJ) {
+        has_object_dep = true;
+      }
+
       if (v_dep.tag == JSONV_VAL_ARRAY) {
         int dep_count = jsonv_arr_length(v_dep.as.p);
         job->dependency_count = dep_count;
         if (dep_count > 0) {
           job->depends_on_ids = na_alloc(arena, dep_count * sizeof(StringView));
           job->depends_on_nodes = na_alloc(arena, dep_count * sizeof(JobNode *));
+          if (has_object_dep) {
+            job->depends_on_conditions = na_alloc(arena, dep_count * sizeof(uint8_t));
+            if (!job->depends_on_conditions) return ERR_OOM;
+          } else {
+            job->depends_on_conditions = NULL;
+          }
           if (!job->depends_on_ids || !job->depends_on_nodes)
             return ERR_OOM;
           for (int d = 0; d < dep_count; d++) {
             Jsonv_Value dep_item = jsonv_arr_val_at(v_dep.as.p, d);
-            if (dep_item.tag != JSONV_VAL_STRING)
+            if (dep_item.tag == JSONV_VAL_STRING) {
+              job->depends_on_ids[d].data = dep_item.as.p;
+              job->depends_on_ids[d].length = jsonv_val_str_len(dep_item);
+              job->depends_on_nodes[d] = NULL;
+              if (job->depends_on_conditions) {
+                job->depends_on_conditions[d] = DEP_COND_SUCCESS;
+              }
+            } else if (dep_item.tag == JSONV_VAL_OBJ) {
+              Jsonv_Value v_job_id;
+              if (!jsonv_obj_get(dep_item.as.p, "job", &v_job_id) || v_job_id.tag != JSONV_VAL_STRING)
+                return ERR_MISSING_VAR;
+              job->depends_on_ids[d].data = v_job_id.as.p;
+              job->depends_on_ids[d].length = jsonv_val_str_len(v_job_id);
+              job->depends_on_nodes[d] = NULL;
+
+              uint8_t mask = 0;
+              Jsonv_Value v_conds;
+              if (jsonv_obj_get(dep_item.as.p, "conditions", &v_conds) && v_conds.tag == JSONV_VAL_ARRAY) {
+                int cond_len = jsonv_arr_length(v_conds.as.p);
+                for (int c = 0; c < cond_len; c++) {
+                  Jsonv_Value cond_val = jsonv_arr_val_at(v_conds.as.p, c);
+                  if (cond_val.tag == JSONV_VAL_STRING) {
+                    StringView cond_sv = { cond_val.as.p, jsonv_val_str_len(cond_val) };
+                    if (sv_equals_cstr(cond_sv, "onSuccess")) {
+                      mask |= DEP_COND_SUCCESS;
+                    } else if (sv_equals_cstr(cond_sv, "onFailure")) {
+                      mask |= DEP_COND_FAILURE;
+                    } else if (sv_equals_cstr(cond_sv, "onSkip")) {
+                      mask |= DEP_COND_SKIP;
+                    } else if (sv_equals_cstr(cond_sv, "onCompletion")) {
+                      mask |= DEP_COND_COMPLETION;
+                    } else {
+                      return ERR_MISSING_VAR;
+                    }
+                  } else {
+                    return ERR_MISSING_VAR;
+                  }
+                }
+                if (mask == 0) {
+                  mask = DEP_COND_SUCCESS;
+                }
+              } else {
+                mask = DEP_COND_SUCCESS;
+              }
+              if (job->depends_on_conditions) {
+                job->depends_on_conditions[d] = mask;
+              }
+            } else {
               return ERR_MISSING_VAR;
-            job->depends_on_ids[d].data = dep_item.as.p;
-            job->depends_on_ids[d].length = jsonv_val_str_len(dep_item);
-            job->depends_on_nodes[d] = NULL;
+            }
           }
         }
       } else if (v_dep.tag == JSONV_VAL_STRING) {
         job->dependency_count = 1;
         job->depends_on_ids = na_alloc(arena, sizeof(StringView));
         job->depends_on_nodes = na_alloc(arena, sizeof(JobNode *));
+        job->depends_on_conditions = NULL;
         if (!job->depends_on_ids || !job->depends_on_nodes)
           return ERR_OOM;
         job->depends_on_ids[0].data = v_dep.as.p;
         job->depends_on_ids[0].length = jsonv_val_str_len(v_dep);
         job->depends_on_nodes[0] = NULL;
+      } else if (v_dep.tag == JSONV_VAL_OBJ) {
+        job->dependency_count = 1;
+        job->depends_on_ids = na_alloc(arena, sizeof(StringView));
+        job->depends_on_nodes = na_alloc(arena, sizeof(JobNode *));
+        job->depends_on_conditions = na_alloc(arena, sizeof(uint8_t));
+        if (!job->depends_on_ids || !job->depends_on_nodes || !job->depends_on_conditions)
+          return ERR_OOM;
+
+        Jsonv_Value v_job_id;
+        if (!jsonv_obj_get(v_dep.as.p, "job", &v_job_id) || v_job_id.tag != JSONV_VAL_STRING)
+          return ERR_MISSING_VAR;
+        job->depends_on_ids[0].data = v_job_id.as.p;
+        job->depends_on_ids[0].length = jsonv_val_str_len(v_job_id);
+        job->depends_on_nodes[0] = NULL;
+
+        uint8_t mask = 0;
+        Jsonv_Value v_conds;
+        if (jsonv_obj_get(v_dep.as.p, "conditions", &v_conds) && v_conds.tag == JSONV_VAL_ARRAY) {
+          int cond_len = jsonv_arr_length(v_conds.as.p);
+          for (int c = 0; c < cond_len; c++) {
+            Jsonv_Value cond_val = jsonv_arr_val_at(v_conds.as.p, c);
+            if (cond_val.tag == JSONV_VAL_STRING) {
+              StringView cond_sv = { cond_val.as.p, jsonv_val_str_len(cond_val) };
+              if (sv_equals_cstr(cond_sv, "onSuccess")) {
+                mask |= DEP_COND_SUCCESS;
+              } else if (sv_equals_cstr(cond_sv, "onFailure")) {
+                mask |= DEP_COND_FAILURE;
+              } else if (sv_equals_cstr(cond_sv, "onSkip")) {
+                mask |= DEP_COND_SKIP;
+              } else if (sv_equals_cstr(cond_sv, "onCompletion")) {
+                mask |= DEP_COND_COMPLETION;
+              } else {
+                return ERR_MISSING_VAR;
+              }
+            } else {
+              return ERR_MISSING_VAR;
+            }
+          }
+          if (mask == 0) {
+            mask = DEP_COND_SUCCESS;
+          }
+        } else {
+          mask = DEP_COND_SUCCESS;
+        }
+        job->depends_on_conditions[0] = mask;
       } else {
         return ERR_MISSING_VAR;
       }
@@ -627,6 +768,7 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
       job->dependency_count = 0;
       job->depends_on_ids = NULL;
       job->depends_on_nodes = NULL;
+      job->depends_on_conditions = NULL;
     }
 
     // Extract Type-Specific Specs
@@ -647,6 +789,8 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
       spec_status = compile_wait_signal_spec(arena, job, job_spec_val);
     } else if (job->type == NODE_WAIT_TIMER) {
       spec_status = compile_wait_timer_spec(job, job_spec_val);
+    } else if (job->type == NODE_TRANSFORM) {
+      spec_status = compile_transform_spec(arena, job, job_spec_val);
     }
     if (spec_status != ERR_SUCCESS) {
       return spec_status;
