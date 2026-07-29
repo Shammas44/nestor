@@ -4,6 +4,30 @@ This specification defines the proposed architectural features for the Nestor In
 
 ---
 
+## Developer Personas & The Provider Boundary
+
+To maintain separation of concerns and scaling efficiency, Nestor divides the integration development lifecycle into two distinct personas, separated by a strict YAML contract boundary:
+
+### 1. Provider Developer
+* **Role**: Low-level integration engineering. Provider developers write C/C++ plugins (dynamic libraries `.so` / `.dylib`) that handle authentication, low-level network protocols, connection pools, and database drivers.
+* **APIs**: They work with the low-level Provider SPI (`nestor_provider_execute`), `Arena` memory allocators, and native system capabilities.
+* **Deliverable**: Compiles binary plugins and publishes a **YAML Provider Contract** (schema file) declaring the exposed operations, required inputs, and return output structures.
+
+### 2. Workflow Developer
+* **Role**: High-level declarative orchestration. Workflow developers write YAML files to coordinate provider operations, map variables, configure step sequences, and evaluate conditionals.
+* **APIs**: They write high-level pipeline declarations and JSONata expressions. They are completely insulated from low-level memory layout, networking sockets, or pointer operations.
+* **Deliverable**: Declarative integration manifests (workflows) compiled and run via `nestor plan` / `nestor apply`.
+
+```
+  [ Provider Developer ] ──► Compiles Plugin (.so) + Defines Contract (.yaml)
+                                                                 │
+                                                                 ▼
+  [ Workflow Developer ] ◄── Orchestrates steps matching the Contract schemas
+```
+
+---
+
+
 ## 1. Ordered Job/Step Variables (Public vs. Private)
 
 To simplify complex JSONata expressions and decouple downstream jobs from upstream step details, Nestor introduces job-level variable blocks with visibility boundaries.
