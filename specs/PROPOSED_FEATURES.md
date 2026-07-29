@@ -9,9 +9,9 @@ This specification defines the proposed architectural features for the Nestor In
 To maintain separation of concerns and scaling efficiency, Nestor divides the integration development lifecycle into two distinct personas, separated by a strict YAML contract boundary:
 
 ### 1. Provider Developer
-* **Role**: Low-level integration engineering. Provider developers write C/C++ plugins (dynamic libraries `.so` / `.dylib`) that handle authentication, low-level network protocols, connection pools, and database drivers.
-* **APIs**: They work with the low-level Provider SPI (`nestor_provider_execute`), `Arena` memory allocators, and native system capabilities.
-* **Deliverable**: Compiles binary plugins and publishes a **YAML Provider Contract** (schema file) declaring the exposed operations, required inputs, and return output structures.
+* **Role**: Low-level integration engineering. Provider developers write C/C++ plugins (dynamic libraries `.so` / `.dylib` or sandboxed binaries) or Python script plugins (conforming to the `nestor_plugin` Python SDK) that handle authentication, low-level network protocols, connection pools, and database drivers.
+* **APIs**: They work with the low-level Provider SPI (`nestor_provider_execute`), `Arena` memory allocators, native system capabilities, or Python's `NestorPlugin` helper API.
+* **Deliverable**: Compiles binary plugins, builds Python script scripts, and publishes a **YAML Provider Contract** (schema file) declaring the exposed operations, required inputs, and return output structures.
 
 ### 2. Workflow Developer
 * **Role**: High-level declarative orchestration. Workflow developers write YAML files to coordinate provider operations, map variables, configure step sequences, and evaluate conditionals.
