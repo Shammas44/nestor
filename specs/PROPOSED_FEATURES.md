@@ -144,3 +144,40 @@ For long-running pipelines (containing webhook suspension gates or timers), Nest
 To optimize execution paths, steps are classified as either:
 * **Data Sources (Read-Only)**: Side-effect-free steps (e.g., `http.get`, `postgres.query`). These can be cached in Nestor's SQLite cache and run concurrently without lock hazards.
 * **Resources (Mutative)**: Steps that mutate external state (e.g., `http.post`, `postgres.insert`). These bypass caching completely.
+
+---
+
+## 8. Declarative Providers (No-Code YAML REST Mapping)
+
+For standard web APIs, Nestor allows Provider Developers to define providers **strictly in YAML/JSON** without writing compiled C code. 
+
+### 8.1 Mechanics
+The provider manifest wraps a base API and maps specific YAML operations to HTTP requests (methods, paths, payload transcoding, and header injections) under the hood. The core engine parses this definition and acts as the runtime provider executor.
+
+### 8.2 Syntax Example (`providers/stripe.yaml`)
+```yaml
+provider: stripe
+description: Declarative Stripe Integration
+configuration:
+  base_url: "https://api.stripe.com/v1"
+  headers:
+    Authorization: "Bearer ${{ secrets.stripe_key }}"
+    Content-Type: "application/json"
+
+operations:
+  create_customer:
+    method: POST
+    path: "/customers"
+    inputs:
+      email: { type: string, required: true }
+      name: { type: string, required: true }
+    outputs:
+      stripe_id: "body.id"
+      created_at: "body.created"
+```
+
+### 8.3 Benefits
+1. **No compilation required**: Zero-compilation overhead for connecting simple HTTP REST web APIs.
+2. **Standardization**: Reuses the core HTTP transport (`transport.c`) and transcoders (`transcoder.c`) natively.
+3. **Decoupled Security**: Credentials and authorization tokens are injected at the provider boundary via configuration blocks, keeping them fully isolated from the high-level workflow files.
+
