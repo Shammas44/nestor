@@ -147,37 +147,37 @@ To optimize execution paths, steps are classified as either:
 
 ---
 
-## 8. Declarative Providers (No-Code YAML REST Mapping)
+## 8. Declarative Providers (No-Code YAML Mapping)
 
-For standard web APIs, Nestor allows Provider Developers to define providers **strictly in YAML/JSON** without writing compiled C code. 
+Nestor allows Provider Developers to define providers **strictly in YAML/JSON** without writing compiled C code, wrapping not just HTTP/REST web services, but **any available native features, database queries, and plugins** of Nestor.
 
 ### 8.1 Mechanics
-The provider manifest wraps a base API and maps specific YAML operations to HTTP requests (methods, paths, payload transcoding, and header injections) under the hood. The core engine parses this definition and acts as the runtime provider executor.
+A declarative provider contract maps exposed operations directly to Nestor's internal capabilities (HTTP requests, database queries, Python scripts, or compiled shared library step execution). The engine parses this mapping and runs the steps internally, performing zero-copy transcoding of inputs and outputs at the boundary.
 
-### 8.2 Syntax Example (`providers/stripe.yaml`)
+### 8.2 Syntax Example (`providers/postgres_helper.yaml`)
+Wrapping a database configuration and exposing simplified SQL operations:
 ```yaml
-provider: stripe
-description: Declarative Stripe Integration
+provider: db_helper
+description: Declarative Database wrapper
 configuration:
-  base_url: "https://api.stripe.com/v1"
-  headers:
-    Authorization: "Bearer ${{ secrets.stripe_key }}"
-    Content-Type: "application/json"
+  connection_string: "${{ secrets.db_url }}"
 
 operations:
-  create_customer:
-    method: POST
-    path: "/customers"
+  fetch_active_users:
+    # Maps operation to Nestor's native postgres query plugin
+    uses: postgres.query
+    args:
+      sql: "SELECT id, email FROM users WHERE status = 'active' LIMIT $1"
+      params:
+        - "${{ inputs.limit }}"
     inputs:
-      email: { type: string, required: true }
-      name: { type: string, required: true }
+      limit: { type: number, required: true }
     outputs:
-      stripe_id: "body.id"
-      created_at: "body.created"
+      users: "body.rows"
 ```
 
 ### 8.3 Benefits
-1. **No compilation required**: Zero-compilation overhead for connecting simple HTTP REST web APIs.
-2. **Standardization**: Reuses the core HTTP transport (`transport.c`) and transcoders (`transcoder.c`) natively.
-3. **Decoupled Security**: Credentials and authorization tokens are injected at the provider boundary via configuration blocks, keeping them fully isolated from the high-level workflow files.
+1. **Multi-Protocol Wrapping**: Declarative providers can wrap REST APIs, SQL databases, filesystems, or Python scripts under a unified, simple operation contract.
+2. **Standardization**: Reuses Nestor's native step runners and transcoders under the hood, maximizing cache efficiency and speed.
+3. **Decoupled Security & Configuration**: Connection credentials, authentication headers, and connection pool configurations are locked in the provider boundary, completely hidden from workflow orchestrators.
 
