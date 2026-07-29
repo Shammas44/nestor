@@ -1,6 +1,7 @@
 #include "nestor.h"
 #include "parser.h"
 #include "cache.h"
+#include "aho_corasick.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -229,19 +230,51 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // 6. Print clean execution context outcomes (jobs, steps, status)
-  Jsonv_Obj *clean_obj = jsonv_obj_new(jsonv_arena, NULL);
-
-  Jsonv_Value jobs_val;
-  if (jsonv_obj_get(root_obj, allocate_jsonv_string(arena, "jobs"), &jobs_val)) {
-    jsonv_obj_set(jsonv_arena, clean_obj, allocate_jsonv_string(arena, "jobs"), jobs_val);
+  // 6. Print clean execution context outcomes (outputs if present and not in debug mode, else jobs & status)
+  bool debug_mode = false;
+  const char *env_debug = getenv("NESTOR_DEBUG");
+  if (env_debug && (strcmp(env_debug, "1") == 0 || strcmp(env_debug, "true") == 0)) {
+    debug_mode = true;
+  }
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--verbose") == 0) {
+      debug_mode = true;
+    }
   }
 
-  jsonv_obj_set(jsonv_arena, clean_obj, allocate_jsonv_string(arena, "status"), jsonv_val_str(allocate_jsonv_string(arena, "success")));
+  Jsonv_Value to_serialize = jsonv_val_undefined();
+  Jsonv_Value outputs_val;
+  bool has_outputs = jsonv_obj_get(root_obj, allocate_jsonv_string(arena, "outputs"), &outputs_val);
+
+  if (has_outputs && !debug_mode) {
+    to_serialize = outputs_val;
+  } else {
+    Jsonv_Obj *clean_obj = jsonv_obj_new(jsonv_arena, NULL);
+    Jsonv_Value jobs_val;
+    if (jsonv_obj_get(root_obj, allocate_jsonv_string(arena, "jobs"), &jobs_val)) {
+      jsonv_obj_set(jsonv_arena, clean_obj, allocate_jsonv_string(arena, "jobs"), jobs_val);
+    }
+    if (has_outputs) {
+      jsonv_obj_set(jsonv_arena, clean_obj, allocate_jsonv_string(arena, "outputs"), outputs_val);
+    }
+    jsonv_obj_set(jsonv_arena, clean_obj, allocate_jsonv_string(arena, "status"), jsonv_val_str(allocate_jsonv_string(arena, "success")));
+    to_serialize = jsonv_val_obj(clean_obj);
+  }
 
   char *json_out = NULL;
-  if (serialize_jsonv_value(arena, jsonv_val_obj(clean_obj), &json_out) == ERR_SUCCESS) {
-    printf("%s\n", json_out);
+  if (serialize_jsonv_value(arena, to_serialize, &json_out) == ERR_SUCCESS) {
+    ACNode *ac_root = ac_create_trie(arena, context_val);
+    if (ac_root) {
+      char *redacted_json = na_alloc(arena, strlen(json_out) * 2 + 1);
+      if (redacted_json) {
+        redact_stream(ac_root, json_out, redacted_json, strlen(json_out));
+        printf("%s\n", redacted_json);
+      } else {
+        printf("%s\n", json_out);
+      }
+    } else {
+      printf("%s\n", json_out);
+    }
   }
 
   cache_close();

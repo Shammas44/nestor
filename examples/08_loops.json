@@ -5,6 +5,7 @@
   "jobs": {
     "while_loop": {
       "type": "loop",
+      "start": true,
       "loop_type": "while",
       "condition": "${{ index < 3 }}",
       "max_iterations": 5,

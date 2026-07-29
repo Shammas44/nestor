@@ -5,6 +5,7 @@
   "jobs": {
     "trusted_plugin_execution": {
       "type": "task",
+      "start": true,
       "steps": [
         {
           "id": "run_inline",

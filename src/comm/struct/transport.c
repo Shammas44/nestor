@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 void *na_alloc(Arena *arena, size_t size);
 
@@ -60,6 +61,18 @@ static size_t my_transport_curl_write_callback(void *contents, size_t size, size
   /*#region*/
   size_t realsize = size * nmemb;
   ResponseBuffer *mem = (ResponseBuffer *)userp;
+  if (mem->is_stream) {
+    // If the step is configured to stream, we write directly to the file descriptor
+    // rather than accumulating in memory. This achieves constant O(1) RAM scaling.
+    if (mem->stream_fd >= 0) {
+      ssize_t written = write(mem->stream_fd, contents, realsize);
+      if (written < 0) {
+        return 0; // abort CURL transfer on write error
+      }
+      mem->len += (size_t)written;
+    }
+    return realsize;
+  }
   if (mem->len + realsize >= mem->cap) {
     mem->cap = mem->len + realsize + 4096;
     char *new_buf = na_alloc(mem->arena, mem->cap);
@@ -247,13 +260,27 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
 
   resp_buf->arena = arena;
   resp_buf->len = 0;
-  resp_buf->cap = 4096;
-  resp_buf->buf = na_alloc(arena, resp_buf->cap);
-  if (!resp_buf->buf) {
-    curl_easy_cleanup(curl);
-    return ERR_OOM;
+  resp_buf->is_stream = step->http.stream;
+  if (resp_buf->is_stream) {
+    resp_buf->cap = 0;
+    resp_buf->buf = NULL;
+    // Generate a unique stream file path for this job step
+    snprintf(resp_buf->stream_file_path, sizeof(resp_buf->stream_file_path), ".nestor_stream_%.*s.json", (int)step->id.length, step->id.data ? step->id.data : "default");
+    resp_buf->stream_fd = open(resp_buf->stream_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (resp_buf->stream_fd < 0) {
+      curl_easy_cleanup(curl);
+      return ERR_HTTP_TRANSPORT;
+    }
+  } else {
+    resp_buf->stream_fd = -1;
+    resp_buf->cap = 4096;
+    resp_buf->buf = na_alloc(arena, resp_buf->cap);
+    if (!resp_buf->buf) {
+      curl_easy_cleanup(curl);
+      return ERR_OOM;
+    }
+    resp_buf->buf[0] = '\0';
   }
-  resp_buf->buf[0] = '\0';
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, my_transport_curl_write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)resp_buf);
 
@@ -314,6 +341,11 @@ static int32_t curl_check_completed(Transport *t, Arena *arena, Jsonv_Arena *jso
         resp_buf->etag[sizeof(resp_buf->etag) - 1] = '\0';
         strncpy(resp_buf->last_modified, req_state->last_modified, sizeof(resp_buf->last_modified) - 1);
         resp_buf->last_modified[sizeof(resp_buf->last_modified) - 1] = '\0';
+      }
+
+      if (resp_buf && resp_buf->is_stream && resp_buf->stream_fd >= 0) {
+        close(resp_buf->stream_fd);
+        resp_buf->stream_fd = -1;
       }
 
       // Remove from completed array by shifting
@@ -462,13 +494,28 @@ static int32_t mock_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
   }
 
   resp_buf->arena = arena;
+  resp_buf->is_stream = step->http.stream;
   size_t body_len = strlen(state->body);
-  resp_buf->buf = na_alloc(arena, body_len + 1);
-  if (!resp_buf->buf) return ERR_OOM;
-  memcpy(resp_buf->buf, state->body, body_len);
-  resp_buf->buf[body_len] = '\0';
-  resp_buf->len = body_len;
-  resp_buf->cap = body_len + 1;
+  if (resp_buf->is_stream) {
+    resp_buf->cap = 0;
+    resp_buf->buf = NULL;
+    resp_buf->len = body_len;
+    snprintf(resp_buf->stream_file_path, sizeof(resp_buf->stream_file_path), ".nestor_stream_%.*s.json", (int)step->id.length, step->id.data ? step->id.data : "default");
+    resp_buf->stream_fd = open(resp_buf->stream_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (resp_buf->stream_fd < 0) {
+      return ERR_HTTP_TRANSPORT;
+    }
+    ssize_t written = write(resp_buf->stream_fd, state->body, body_len);
+    (void)written;
+  } else {
+    resp_buf->stream_fd = -1;
+    resp_buf->buf = na_alloc(arena, body_len + 1);
+    if (!resp_buf->buf) return ERR_OOM;
+    memcpy(resp_buf->buf, state->body, body_len);
+    resp_buf->buf[body_len] = '\0';
+    resp_buf->len = body_len;
+    resp_buf->cap = body_len + 1;
+  }
 
   gettimeofday(&state->start_time, NULL);
   state->delay_ms = 0;
@@ -507,6 +554,10 @@ static int32_t mock_check_completed(Transport *t, Arena *arena, Jsonv_Arena *jso
                     (now.tv_usec - state->start_time.tv_usec) / 1000;
   if (elapsed_ms >= state->delay_ms) {
     *completed = true;
+    if (resp_buf && resp_buf->is_stream && resp_buf->stream_fd >= 0) {
+      close(resp_buf->stream_fd);
+      resp_buf->stream_fd = -1;
+    }
   } else {
     *completed = false;
   }

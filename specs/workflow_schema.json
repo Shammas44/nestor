@@ -60,7 +60,9 @@
                     "headers": { "type": "object" },
                     "body": { "type": "object" },
                     "timeout": { "type": "string" },
-                    "mtls_profile": { "type": "string" }
+                    "mtls_profile": { "type": "string" },
+                    "stream": { "type": "boolean" },
+                    "chunk_size": { "type": "integer" }
                   }
                 },
                 "uses": { "type": "string" },
@@ -106,11 +108,22 @@
           },
           "strategy": { "type": "string" },
           "n_required": { "type": "integer" },
-          "loop_type": { "type": "string", "enum": ["while", "for_each"] },
+          "loop_type": { "type": "string", "enum": ["while", "for_each", "stream_chunk"] },
           "max_iterations": { "type": "integer" },
           "items": { "type": "string" },
+          "source": { "type": "string" },
+          "chunk_record_limit": { "type": "integer" },
           "correlation_id": { "type": "string" },
-          "duration": { "type": "string" }
+          "duration": { "type": "string" },
+          "start": { "type": "boolean" },
+          "end": { "type": "boolean" },
+          "return": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "object" },
+              { "type": "array" }
+            ]
+          }
         }
       }
     }

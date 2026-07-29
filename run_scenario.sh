@@ -72,10 +72,11 @@ while true; do
     echo "6) Scenario 6: Secrets Redaction Demo (06_secrets_redaction.json)"
     echo "7) Scenario 7: Conditional Execution (07_conditionals.json)"
     echo "8) Scenario 8: Loop Iterations (08_loops.json)"
-    echo "9) Stop/Kill Mock HTTP Server"
-    echo "10) Quit"
+    echo "9) Scenario 9: Big Data Payload Handling (11_bigdata_test.json)"
+    echo "10) Stop/Kill Mock HTTP Server"
+    echo "11) Quit"
     echo "=============================================="
-    read -p "Select a scenario to run or action (1-10): " choice
+    read -p "Select a scenario to run or action (1-11): " choice
     echo ""
 
     case $choice in
@@ -124,10 +125,16 @@ while true; do
             cat examples/08_loops.json | ./bin/main
             ;;
         9)
+            echo "Running Scenario 9: Big Data Payload Handling"
+            echo "Running: cat examples/11_bigdata_test.json | ./bin/main"
+            echo "----------------------------------------------"
+            cat examples/11_bigdata_test.json | ./bin/main
+            ;;
+        10)
             echo "Stopping mock HTTP server..."
             stop_mock_server
             ;;
-        10)
+        11)
             echo "Exiting Scenario Runner."
             nc -z 127.0.0.1 8080 >/dev/null 2>&1
             if [ $? -eq 0 ]; then

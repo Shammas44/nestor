@@ -14,6 +14,9 @@ typedef struct {
   char expires[128];
   char etag[128];
   char last_modified[128];
+  bool is_stream;
+  char stream_file_path[256];
+  int stream_fd;
 } ResponseBuffer;
 
 typedef struct Transport Transport;

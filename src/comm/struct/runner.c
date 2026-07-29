@@ -1,5 +1,6 @@
 #include "runner.h"
 #include "evaluator.h"
+#include <jsonata/jsonata.h>
 #include "aho_corasick.h"
 #include "transport.h"
 #include "plugin.h"
@@ -21,6 +22,8 @@ static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <errno.h>
 
 void *na_alloc(Arena *arena, size_t size);
@@ -423,6 +426,8 @@ struct ActiveJob {
   size_t loop_iter;
   size_t max_iterations;
   Jsonv_Value loop_history_obj;
+  char loop_stream_file_path[256];
+  size_t loop_stream_record_offset;
 
   // Active HTTP transport fields
   void *easy_handle;
@@ -639,6 +644,48 @@ static void register_loop_job_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, Js
   /*#endregion*/
 }
 
+typedef struct {
+  Arena *parent_arena;
+  Arena *loop_arena;
+  Jsonv_Arena *jsonv_arena;
+  Jsonv_Arr *chunk_arr;
+  size_t offset;
+  size_t limit;
+  size_t count;
+  bool error;
+} NestorChunkBuilderContext;
+
+static void nestor_chunk_match_cb(void *user_data, Jsonata_ValType type, const char *val, size_t val_len) {
+  /*#region*/
+  (void)type;
+  NestorChunkBuilderContext *ctx = (NestorChunkBuilderContext *)user_data;
+  if (ctx->error) return;
+
+  if (ctx->count >= ctx->offset && ctx->count < ctx->offset + ctx->limit) {
+    char *tmp = na_alloc(ctx->loop_arena, val_len + 1);
+    if (!tmp) {
+      ctx->error = true;
+      return;
+    }
+    memcpy(tmp, val, val_len);
+    tmp[val_len] = '\0';
+
+    Jsonv_Obj *elem = jsonv_obj_new(ctx->jsonv_arena, NULL);
+    if (!elem) {
+      ctx->error = true;
+      return;
+    }
+    char *k_id = allocate_jsonv_string(ctx->parent_arena, "id", 2);
+    int64_t id_val = atoll(tmp);
+    jsonv_obj_set(ctx->jsonv_arena, elem, k_id, jsonv_val_int(id_val));
+
+    int len = jsonv_arr_length(ctx->chunk_arr);
+    jsonv_arr_set(ctx->jsonv_arena, ctx->chunk_arr, len, jsonv_val_obj(elem));
+  }
+  ctx->count++;
+  /*#endregion*/
+}
+
 static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj) {
   /*#region*/
   // Setup next loop iteration index and variables in workflow context.
@@ -779,6 +826,133 @@ static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Json
       }
       aj->curr_step = job->spec.loop_node.steps_head;
     }
+  } else if (sv_equals_cstr(job->spec.loop_node.loop_type, "stream_chunk")) {
+    /*#region*/
+    if (aj->loop_iter == 0) {
+      Jsonv_Value source_val = jsonv_val_undefined();
+      int32_t status = evaluate_expression(arena, job->spec.loop_node.source, jsonv_arena, *context_val, &source_val);
+      if (status != ERR_SUCCESS || source_val.tag != JSONV_VAL_STRING) {
+        job->execution_state = STATE_FAILED;
+        return status != ERR_SUCCESS ? status : ERR_MISSING_VAR;
+      }
+      strncpy(aj->loop_stream_file_path, (const char *)source_val.as.p, sizeof(aj->loop_stream_file_path) - 1);
+      aj->loop_stream_file_path[sizeof(aj->loop_stream_file_path) - 1] = '\0';
+      aj->loop_stream_record_offset = 0;
+    }
+
+    int fd = open(aj->loop_stream_file_path, O_RDONLY);
+    if (fd < 0) {
+      job->execution_state = STATE_FAILED;
+      return ERR_HTTP_TRANSPORT;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) < 0 || st.st_size == 0) {
+      close(fd);
+      job->execution_state = STATE_SUCCEEDED;
+      aj->curr_step = NULL;
+      register_loop_job_outcome(arena, jsonv_arena, context_val, aj);
+      return ERR_SUCCESS;
+    }
+
+    void *addr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (addr == MAP_FAILED) {
+      close(fd);
+      job->execution_state = STATE_FAILED;
+      return ERR_HTTP_TRANSPORT;
+    }
+
+    char filter_key[256] = "data";
+    if (job->spec.loop_node.items.length > 0 && job->spec.loop_node.items.length < sizeof(filter_key)) {
+      memcpy(filter_key, job->spec.loop_node.items.data, job->spec.loop_node.items.length);
+      filter_key[job->spec.loop_node.items.length] = '\0';
+    }
+
+    Jsonv_Arr *chunk_arr = jsonv_arr_new(jsonv_arena);
+    NestorChunkBuilderContext builder_ctx = {
+      .parent_arena = arena,
+      .loop_arena = aj->loop_arena,
+      .jsonv_arena = jsonv_arena,
+      .chunk_arr = chunk_arr,
+      .offset = aj->loop_stream_record_offset,
+      .limit = job->spec.loop_node.chunk_record_limit,
+      .count = 0,
+      .error = false
+    };
+
+    Jsonata_Arena *jsonata_arena = nestor_jsonata_arena_new(aj->loop_arena);
+    Jsonata_StreamFilter *filter = jsonata_stream_filter_create(filter_key, nestor_chunk_match_cb, &builder_ctx, jsonata_arena);
+    if (!filter) {
+      munmap(addr, st.st_size);
+      close(fd);
+      job->execution_state = STATE_FAILED;
+      return ERR_OOM;
+    }
+
+    jsonv_sax_callbacks callbacks = {
+      .on_begin_object = jsonata_stream_filter_on_begin_object,
+      .on_end_object = jsonata_stream_filter_on_end_object,
+      .on_begin_array = jsonata_stream_filter_on_begin_array,
+      .on_end_array = jsonata_stream_filter_on_end_array,
+      .on_object_key = jsonata_stream_filter_on_object_key,
+      .on_string = jsonata_stream_filter_on_string,
+      .on_number = jsonata_stream_filter_on_number,
+      .on_boolean = jsonata_stream_filter_on_boolean,
+      .on_null = jsonata_stream_filter_on_null
+    };
+
+    jsonv_parse_sax((const unsigned char *)addr, st.st_size, &callbacks, filter);
+
+    munmap(addr, st.st_size);
+    close(fd);
+
+    if (builder_ctx.error) {
+      job->execution_state = STATE_FAILED;
+      return ERR_HTTP_TRANSPORT;
+    }
+
+    int chunk_len = jsonv_arr_length(chunk_arr);
+    if (chunk_len == 0) {
+      job->execution_state = STATE_SUCCEEDED;
+      aj->curr_step = NULL;
+      register_loop_job_outcome(arena, jsonv_arena, context_val, aj);
+      return ERR_SUCCESS;
+    }
+
+    if (aj->loop_iter >= aj->max_iterations) {
+      job->execution_state = STATE_FAILED;
+      return ERR_LOOP_MAX_ITERATIONS;
+    }
+
+    char *k_index = allocate_jsonv_string(arena, "index", 5);
+    jsonv_obj_set(jsonv_arena, context_val->as.p, k_index, jsonv_val_int((int64_t)aj->loop_iter));
+
+    char *k_chunk = allocate_jsonv_string(arena, "chunk", 5);
+    jsonv_obj_set(jsonv_arena, context_val->as.p, k_chunk, jsonv_val_arr(chunk_arr));
+
+    if (aj->loop_iter == 0) {
+      aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+      aj->loop_history_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+      char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+      jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+
+      char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+      Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+      jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, aj->loop_history_obj);
+      Jsonv_Value jobs_val_obj;
+      char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+      if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+        jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+      }
+    } else {
+      aj->steps_state_obj = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+      char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+      jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+    }
+
+    aj->loop_stream_record_offset += chunk_len;
+    aj->curr_step = job->spec.loop_node.steps_head;
+    /*#endregion*/
   }
   return ERR_SUCCESS;
   /*#endregion*/
@@ -830,8 +1004,27 @@ static int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, 
     }
   }
   Jsonv_Value body_val = jsonv_val_undefined();
-  if (aj->resp_buf.len > 0) {
-    Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+  Jsonv_Value stream_val = jsonv_val_undefined();
+  if (aj->resp_buf.is_stream) {
+    // If streaming is enabled, we create a placeholder body object containing
+    // the target file path. This path will trigger lazy property lookups dynamically.
+    Jsonv_Obj *stream_body_obj = jsonv_obj_new(jsonv_arena, NULL);
+    char *k_sfp = allocate_jsonv_string(arena, "_stream_file_path", 17);
+    char *sfp_val = allocate_jsonv_string(arena, aj->resp_buf.stream_file_path, strlen(aj->resp_buf.stream_file_path));
+    jsonv_obj_set(jsonv_arena, stream_body_obj, k_sfp, jsonv_val_str(sfp_val));
+    body_val = jsonv_val_obj(stream_body_obj);
+    stream_val = jsonv_val_str(sfp_val);
+  } else if (aj->resp_buf.len > 0) {
+    Jsonv_Config config = {0};
+    config.default_block_size = 4096;
+    config.max_limit = 16 * 1024 * 1024;
+    config.max_depth = 128;
+    config.max_values = 100000;
+    config.max_objects = 50000;
+    config.max_array = 50000;
+    config.max_string_bytes = 4 * 1024 * 1024;
+
+    Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, &config, NULL);
     if (temp_ctx) {
       if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)aj->resp_buf.buf) ||
           jsonv_ctx_parse_yaml_data(temp_ctx, (const unsigned char *)aj->resp_buf.buf)) {
@@ -853,6 +1046,10 @@ static int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, 
   char *k_body = allocate_jsonv_string(arena, "body", 4);
   jsonv_obj_set(jsonv_arena, outcome_obj, k_status_code, jsonv_val_int(status_code));
   jsonv_obj_set(jsonv_arena, outcome_obj, k_body, body_val);
+  if (aj->resp_buf.is_stream) {
+    char *k_stream = allocate_jsonv_string(arena, "stream", 6);
+    jsonv_obj_set(jsonv_arena, outcome_obj, k_stream, stream_val);
+  }
 
   save_step_outcome(arena, jsonv_arena, aj, step, outcome_obj);
 
@@ -1647,6 +1844,86 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
         }
         job = job->next_sorted;
       }
+    }
+
+    // Check if any exit/end job has succeeded
+    JobNode *exit_job = NULL;
+    JobNode *jc = ast->jobs_head;
+    while (jc) {
+      if (jc->execution_state == STATE_SUCCEEDED && (jc->is_end || jc->return_expr.length > 0)) {
+        exit_job = jc;
+        break;
+      }
+      jc = jc->next_sorted;
+    }
+
+    if (exit_job) {
+      Jsonv_Value evaluated_out = jsonv_val_undefined();
+      if (exit_job->return_expr.length > 0) {
+        StringView expr = exit_job->return_expr;
+        // Trim leading whitespace
+        while (expr.length > 0 && (expr.data[0] == ' ' || expr.data[0] == '\t' || expr.data[0] == '\n' || expr.data[0] == '\r')) {
+          expr.data++;
+          expr.length--;
+        }
+        if (expr.length > 0 && (expr.data[0] == '{' || expr.data[0] == '[')) {
+          // Parse JSON structure
+          char *json_cstr = na_alloc(arena, expr.length + 1);
+          if (json_cstr) {
+            memcpy(json_cstr, expr.data, expr.length);
+            json_cstr[expr.length] = '\0';
+
+            Jsonv_Config config = {0};
+            config.default_block_size = 4096;
+            config.max_limit = 16 * 1024 * 1024;
+            config.max_depth = 128;
+            config.max_values = 10000;
+            config.max_objects = 5000;
+            config.max_array = 5000;
+            config.max_string_bytes = 4 * 1024 * 1024;
+
+            Jsonv_Arena_Error parser_err = 0;
+            Jsonv_Context *tmp_ctx = jsonv_ctx_new(jsonv_arena, &config, &parser_err);
+            if (tmp_ctx) {
+              if (jsonv_ctx_parse_yaml_data(tmp_ctx, (const unsigned char *)json_cstr) ||
+                  jsonv_ctx_parse_data(tmp_ctx, (const unsigned char *)json_cstr)) {
+                Jsonv_Value parsed_val;
+                if (jsonv_ctx_get_value(tmp_ctx, &parsed_val)) {
+                  evaluated_out = resolve_json_value(arena, parsed_val, jsonv_arena, *context_val);
+                }
+              }
+            }
+          }
+        } else {
+          int32_t status = evaluate_expression(arena, expr, jsonv_arena, *context_val, &evaluated_out);
+          if (status != ERR_SUCCESS) {
+            ret_val = status;
+            goto cleanup;
+          }
+        }
+      } else {
+        // "return" is not defined, use job outputs
+        Jsonv_Value jobs_val_obj;
+        char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+        if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+          char *job_id_cstr = allocate_jsonv_string(arena, exit_job->id.data, exit_job->id.length);
+          Jsonv_Value job_outcome_val;
+          if (jsonv_obj_get(jobs_val_obj.as.p, job_id_cstr, &job_outcome_val) && job_outcome_val.tag == JSONV_VAL_OBJ) {
+            char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
+            Jsonv_Value job_outputs_val;
+            if (jsonv_obj_get(job_outcome_val.as.p, k_outputs, &job_outputs_val)) {
+              evaluated_out = job_outputs_val;
+            }
+          }
+        }
+      }
+
+      // Bind evaluated value to a top-level "outputs" key
+      char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
+      jsonv_obj_set(jsonv_arena, context_val->as.p, k_outputs, evaluated_out);
+
+      ret_val = ERR_SUCCESS;
+      goto cleanup;
     }
 
     JobNode *job = ast->jobs_head;

@@ -213,6 +213,7 @@ TIMED_TEST(stage8, concurrency_throttling, init, fini)
     "  \"jobs\": {\n"
     "    \"job1\": {\n"
     "      \"type\": \"task\",\n"
+    "      \"start\": true,\n"
     "      \"steps\": [ { \"id\": \"s1\", \"http\": { \"method\": \"POST\", \"url\": \"http://127.0.0.1:8080/delay/0.5\" } } ]\n"
     "    },\n"
     "    \"job2\": {\n"
@@ -1215,6 +1216,248 @@ TIMED_TEST(stage8, dynamic_plugin_sandboxed_subprocess, init, fini)
   cr_assert_eq(val_prop.tag, JSONV_VAL_STRING);
   cr_assert(sv_equals_cstr((StringView){ val_prop.as.p, jsonv_val_str_len(val_prop) }, "Processed: hello_sandbox"));
 
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, deterministic_boundaries_multiple_starts, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  // 2 root jobs without start flag
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Multiple Starts Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"job1\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"steps\": [ { \"id\": \"s1\", \"uses\": \"dummy_plugin\" } ]\n"
+    "    },\n"
+    "    \"job2\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"steps\": [ { \"id\": \"s2\", \"uses\": \"dummy_plugin\" } ]\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+
+  WorkflowAST ast;
+  int32_t status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  int32_t compile_status = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_status, ERR_INVALID_BOUNDARY);
+
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, deterministic_boundaries_unjoined_fork, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Unjoined Fork Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"start_job\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"start\": true,\n"
+    "      \"steps\": [ { \"id\": \"s0\", \"uses\": \"dummy_plugin\" } ]\n"
+    "    },\n"
+    "    \"fork_job\": {\n"
+    "      \"type\": \"fork\",\n"
+    "      \"depends_on\": \"start_job\",\n"
+    "      \"branches\": [\"job_a\", \"job_b\"]\n"
+    "    },\n"
+    "    \"job_a\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"steps\": [ { \"id\": \"s1\", \"uses\": \"dummy_plugin\" } ]\n"
+    "    },\n"
+    "    \"job_b\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"end\": true,\n"
+    "      \"steps\": [ { \"id\": \"s2\", \"uses\": \"dummy_plugin\" } ]\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+
+  WorkflowAST ast;
+  int32_t status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  int32_t compile_status = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_status, ERR_INVALID_BOUNDARY);
+
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, deterministic_boundaries_valid_flow, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Valid Flow Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"job1\": {\n"
+    "      \"type\": \"transform\",\n"
+    "      \"start\": true,\n"
+    "      \"spec\": { \"expression\": \"10 + 20\" },\n"
+    "      \"return\": {\n"
+    "        \"result_val\": \"${{ jobs.job1.result }}\",\n"
+    "        \"status_str\": \"completed\"\n"
+    "      }\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+
+  WorkflowAST ast;
+  int32_t status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  status = compile_workflow(arena, &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "env"), jsonv_val_obj(env_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  Transport *mock_trans = transport_mock_new(arena);
+  int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+  mock_trans->ops->destroy(mock_trans);
+
+  // Verify that outputs exists under top-level outputs
+  Jsonv_Value outputs_val;
+  cr_assert(jsonv_obj_get(context_val.as.p, "outputs", &outputs_val));
+  cr_assert_eq(outputs_val.tag, JSONV_VAL_OBJ);
+
+  Jsonv_Value res_prop;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "result_val", &res_prop));
+  cr_assert_eq(res_prop.tag, JSONV_VAL_INT);
+  cr_assert_eq(res_prop.as.i, 30);
+
+  Jsonv_Value status_prop;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "status_str", &status_prop));
+  cr_assert_eq(status_prop.tag, JSONV_VAL_STRING);
+  cr_assert(sv_equals_cstr((StringView){ status_prop.as.p, jsonv_val_str_len(status_prop) }, "completed"));
+
+  arena_destroy(arena);
+  /*#endregion*/
+END_TIMED_TEST
+
+TIMED_TEST(stage8, stream_parsing_and_chunk_loop, init, fini)
+  /*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+    "{\n"
+    "  \"version\": \"2.0.0\",\n"
+    "  \"name\": \"Stream Chunk Test\",\n"
+    "  \"on\": { \"manual\": {} },\n"
+    "  \"jobs\": {\n"
+    "    \"fetch_data\": {\n"
+    "      \"type\": \"task\",\n"
+    "      \"start\": true,\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"download\",\n"
+    "          \"http\": {\n"
+    "            \"method\": \"GET\",\n"
+    "            \"url\": \"http://127.0.0.1:8080/api/stream_test\",\n"
+    "            \"stream\": true\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    },\n"
+    "    \"process_chunks\": {\n"
+    "      \"type\": \"loop\",\n"
+    "      \"loop_type\": \"stream_chunk\",\n"
+    "      \"source\": \"jobs.fetch_data.steps.download.stream\",\n"
+    "      \"items\": \"data.id\",\n"
+    "      \"chunk_record_limit\": 2,\n"
+    "      \"depends_on\": [\"fetch_data\"],\n"
+    "      \"steps\": [\n"
+    "        {\n"
+    "          \"id\": \"mock_call\",\n"
+    "          \"http\": {\n"
+    "            \"method\": \"POST\",\n"
+    "            \"url\": \"http://127.0.0.1:8080/api/mock_chunk_step\",\n"
+    "            \"body\": {\n"
+    "              \"first_id\": \"${{ chunk[0].id }}\"\n"
+    "            }\n"
+    "          }\n"
+    "        }\n"
+    "      ]\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+
+  WorkflowAST ast;
+  int32_t status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  status = compile_workflow(arena, &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "env"), jsonv_val_obj(env_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  Transport *mock_trans = transport_mock_new(arena);
+  transport_mock_add_response("http://127.0.0.1:8080/api/stream_test", "GET", 200, "{\"data\": [{\"id\": 10}, {\"id\": 20}, {\"id\": 30}]}");
+  transport_mock_add_response("http://127.0.0.1:8080/api/mock_chunk_step", "POST", 200, "{\"status\": \"ok\"}");
+
+  int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+  mock_trans->ops->destroy(mock_trans);
+
+  Jsonv_Value jobs_val;
+  cr_assert(jsonv_obj_get(context_val.as.p, "jobs", &jobs_val));
+  cr_assert_eq(jobs_val.tag, JSONV_VAL_OBJ);
+
+  Jsonv_Value loop_outcome;
+  cr_assert(jsonv_obj_get(jobs_val.as.p, "process_chunks", &loop_outcome));
+  cr_assert_eq(loop_outcome.tag, JSONV_VAL_OBJ);
+
+  Jsonv_Value steps_val;
+  cr_assert(jsonv_obj_get(loop_outcome.as.p, "steps", &steps_val));
+  cr_assert_eq(steps_val.tag, JSONV_VAL_OBJ);
+
+  Jsonv_Value mock_call_val;
+  cr_assert(jsonv_obj_get(steps_val.as.p, "mock_call", &mock_call_val));
+  cr_assert_eq(mock_call_val.tag, JSONV_VAL_ARRAY);
+  cr_assert_eq(jsonv_arr_length(mock_call_val.as.p), 2);
+
+  Jsonv_Value iter_0;
+  cr_assert(jsonv_arr_get(mock_call_val.as.p, 0, &iter_0));
+  cr_assert_eq(iter_0.tag, JSONV_VAL_OBJ);
+
+  Jsonv_Value sc_prop;
+  cr_assert(jsonv_obj_get(iter_0.as.p, "status_code", &sc_prop));
+  cr_assert_eq(sc_prop.tag, JSONV_VAL_INT);
+  cr_assert_eq(sc_prop.as.i, 200);
+
+  unlink(".nestor_stream_download.json");
   arena_destroy(arena);
   /*#endregion*/
 END_TIMED_TEST

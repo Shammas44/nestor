@@ -1,0 +1,41 @@
+version: 2.0.0
+name: Big Data Capabilities Test
+'on':
+  manual: {}
+jobs:
+  fetch_bigdata:
+    type: task
+    start: true
+    steps:
+    - id: get_payload
+      http:
+        method: GET
+        url: http://127.0.0.1:8080/api/bigdata/2.0
+        stream: true
+        chunk_size: 65536
+  extract_meta:
+    type: transform
+    depends_on:
+    - fetch_bigdata
+    spec:
+      expression: "${{ 'Retrieved ' & jobs.fetch_bigdata.steps.get_payload.body.size_mb & ' MB containing ' & jobs.fetch_bigdata.steps.get_payload.body.element_count & ' records.' }}"
+  process_chunks:
+    type: loop
+    loop_type: stream_chunk
+    source: jobs.fetch_bigdata.steps.get_payload.stream
+    items: data.id
+    chunk_record_limit: 500
+    depends_on:
+    - fetch_bigdata
+    - extract_meta
+    steps:
+    - id: post_chunk
+      http:
+        method: POST
+        url: http://127.0.0.1:8080/api/transform
+        body:
+          records: "${{ chunk }}"
+    return:
+      status: success
+      meta_summary: "${{ jobs.extract_meta.result }}"
+      aggregated_records: "${{ jobs.process_chunks.steps.post_chunk.body.received_body.records }}"

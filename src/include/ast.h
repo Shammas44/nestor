@@ -51,6 +51,8 @@ struct StepNode {
     Jsonv_Value headers;
     Jsonv_Value body;
     StringView mtls_profile;
+    bool stream;
+    int chunk_size;
   } http;
 
   struct {
@@ -86,6 +88,10 @@ struct JobNode {
   // Bitwise/byte execution state tracking
   uint8_t execution_state; // PENDING, RUNNING, SUCCEEDED, FAILED, SKIPPED, SUSPENDED
 
+  bool is_start;
+  bool is_end;
+  StringView return_expr;
+
   union {
     struct {
       StepNode *steps_head;
@@ -117,11 +123,13 @@ struct JobNode {
     } join_node;
 
     struct {
-      StringView loop_type; // "while", "for_each"
+      StringView loop_type; // "while", "for_each", "stream_chunk"
       StringView condition;
       StringView items;
       size_t max_iterations;
       StepNode *steps_head;
+      StringView source;
+      size_t chunk_record_limit;
     } loop_node;
 
     struct {

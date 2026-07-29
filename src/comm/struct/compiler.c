@@ -1,5 +1,6 @@
 #include "compiler.h"
 #include <string.h>
+#include "evaluator.h"
 
 void *na_alloc(Arena *arena, size_t size);
 
@@ -49,6 +50,20 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
     if (jsonv_obj_get(step_http.as.p, "mtls_profile", &v_mtls) && v_mtls.tag == JSONV_VAL_STRING) {
       step->http.mtls_profile.data = v_mtls.as.p;
       step->http.mtls_profile.length = jsonv_val_str_len(v_mtls);
+    }
+    Jsonv_Value v_stream;
+    step->http.stream = false;
+    if (jsonv_obj_get(step_http.as.p, "stream", &v_stream) && v_stream.tag == JSONV_VAL_BOOLEAN) {
+      step->http.stream = v_stream.as.boolean;
+    }
+    Jsonv_Value v_chunk_size;
+    step->http.chunk_size = 0;
+    if (jsonv_obj_get(step_http.as.p, "chunk_size", &v_chunk_size)) {
+      if (v_chunk_size.tag == JSONV_VAL_INT) {
+        step->http.chunk_size = (int)v_chunk_size.as.i;
+      } else if (v_chunk_size.tag == JSONV_VAL_DOUBLE) {
+        step->http.chunk_size = (int)v_chunk_size.as.d;
+      }
     }
   } else if (jsonv_obj_get(step_val.as.p, "uses", &step_uses) && step_uses.tag == JSONV_VAL_STRING) {
     step->is_http = false;
@@ -331,6 +346,20 @@ static int32_t compile_loop_spec(Arena *arena, JobNode *job, Jsonv_Value job_spe
       job->spec.loop_node.max_iterations = (size_t)v_max_iter.as.d;
     }
   }
+  Jsonv_Value v_source;
+  if (jsonv_obj_get(job_spec_val.as.p, "source", &v_source) && v_source.tag == JSONV_VAL_STRING) {
+    job->spec.loop_node.source.data = v_source.as.p;
+    job->spec.loop_node.source.length = jsonv_val_str_len(v_source);
+  }
+  Jsonv_Value v_chunk_limit;
+  job->spec.loop_node.chunk_record_limit = 1000; // default chunk record limit
+  if (jsonv_obj_get(job_spec_val.as.p, "chunk_record_limit", &v_chunk_limit)) {
+    if (v_chunk_limit.tag == JSONV_VAL_INT) {
+      job->spec.loop_node.chunk_record_limit = (size_t)v_chunk_limit.as.i;
+    } else if (v_chunk_limit.tag == JSONV_VAL_DOUBLE) {
+      job->spec.loop_node.chunk_record_limit = (size_t)v_chunk_limit.as.d;
+    }
+  }
 
   Jsonv_Value v_steps;
   if (jsonv_obj_get(job_spec_val.as.p, "steps", &v_steps) && v_steps.tag == JSONV_VAL_ARRAY) {
@@ -553,6 +582,99 @@ static int32_t topological_sort(Arena *arena, JobNode **job_nodes, int job_count
   /*#endregion*/
 }
 
+static bool has_unjoined_exit_path(JobNode *current, JobNode **job_nodes, int job_count, bool *visited, int current_idx) {
+  /*#region*/
+  if (visited[current_idx]) {
+    return false;
+  }
+  visited[current_idx] = true;
+
+  if (current->type == NODE_JOIN) {
+    return false;
+  }
+
+  if (current->is_end || current->return_expr.length > 0) {
+    return true;
+  }
+
+  for (int i = 0; i < job_count; i++) {
+    JobNode *v = job_nodes[i];
+    for (size_t d = 0; d < v->dependency_count; d++) {
+      if (v->depends_on_nodes[d] == current) {
+        if (has_unjoined_exit_path(v, job_nodes, job_count, visited, i)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+  /*#endregion*/
+}
+
+static int32_t validate_boundaries(Arena *arena, JobNode **job_nodes, int job_count) {
+  /*#region*/
+  int start_jobs_count = 0;
+  int root_jobs_count = 0;
+  JobNode *inferred_start_job = NULL;
+
+  for (int i = 0; i < job_count; i++) {
+    if (job_nodes[i]->is_start) {
+      start_jobs_count++;
+    }
+    if (job_nodes[i]->dependency_count == 0) {
+      root_jobs_count++;
+      inferred_start_job = job_nodes[i];
+    }
+  }
+
+  if (start_jobs_count > 1) {
+    return ERR_INVALID_BOUNDARY;
+  }
+
+  if (start_jobs_count == 0) {
+    if (root_jobs_count == 1) {
+      inferred_start_job->is_start = true;
+    } else if (root_jobs_count == 0) {
+      return ERR_CYCLIC_DEP;
+    } else {
+      return ERR_INVALID_BOUNDARY;
+    }
+  }
+
+  for (int i = 0; i < job_count; i++) {
+    JobNode *job = job_nodes[i];
+    if (job->type == NODE_FORK) {
+      for (size_t b = 0; b < job->spec.fork_node.branch_count; b++) {
+        StringView branch_id = job->spec.fork_node.branches[b];
+        JobNode *branch_job = NULL;
+        int branch_idx = -1;
+        for (int k = 0; k < job_count; k++) {
+          if (sv_compare(branch_id, job_nodes[k]->id) == 0) {
+            branch_job = job_nodes[k];
+            branch_idx = k;
+            break;
+          }
+        }
+        if (!branch_job) {
+          return ERR_MISSING_VAR;
+        }
+
+        bool *visited = na_alloc(arena, job_count * sizeof(bool));
+        if (!visited) return ERR_OOM;
+        memset(visited, 0, job_count * sizeof(bool));
+
+        if (has_unjoined_exit_path(branch_job, job_nodes, job_count, visited, branch_idx)) {
+          return ERR_INVALID_BOUNDARY;
+        }
+      }
+    }
+  }
+
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
 int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
   /*#region*/
   if (!arena || !ast)
@@ -591,6 +713,48 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
     job->id.data = job_id_cstr;
     job->id.length = strlen(job_id_cstr);
     job->execution_state = 0; // PENDING
+
+    // Extract boundary properties
+    Jsonv_Value v_start;
+    if (jsonv_obj_get(job_spec_val.as.p, "start", &v_start)) {
+      if (v_start.tag == JSONV_VAL_BOOLEAN) {
+        job->is_start = v_start.as.boolean;
+      } else {
+        return ERR_INVALID_BOUNDARY;
+      }
+    } else {
+      job->is_start = false;
+    }
+
+    Jsonv_Value v_end;
+    if (jsonv_obj_get(job_spec_val.as.p, "end", &v_end)) {
+      if (v_end.tag == JSONV_VAL_BOOLEAN) {
+        job->is_end = v_end.as.boolean;
+      } else {
+        return ERR_INVALID_BOUNDARY;
+      }
+    } else {
+      job->is_end = false;
+    }
+
+    Jsonv_Value v_return;
+    if (jsonv_obj_get(job_spec_val.as.p, "return", &v_return)) {
+      if (v_return.tag == JSONV_VAL_STRING) {
+        job->return_expr.data = v_return.as.p;
+        job->return_expr.length = jsonv_val_str_len(v_return);
+      } else {
+        char *serialized_str = NULL;
+        int32_t ser_status = serialize_jsonv_value(arena, v_return, &serialized_str);
+        if (ser_status != ERR_SUCCESS) {
+          return ser_status;
+        }
+        job->return_expr.data = serialized_str;
+        job->return_expr.length = strlen(serialized_str);
+      }
+    } else {
+      job->return_expr.data = NULL;
+      job->return_expr.length = 0;
+    }
 
     // Extract Type
     Jsonv_Value v_type;
@@ -806,6 +970,10 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
   // 2. Resolve dependency nodes
   dep_status = resolve_dependencies(job_nodes, job_count);
   if (dep_status != ERR_SUCCESS) return dep_status;
+
+  // 2.5. Deterministic Boundary Validation
+  int32_t boundary_status = validate_boundaries(arena, job_nodes, job_count);
+  if (boundary_status != ERR_SUCCESS) return boundary_status;
 
   // 3. Kahn's Algorithm for Topological Sorting & Cycle Detection
   JobNode *sorted_head = NULL;

@@ -14,5 +14,8 @@ Jsonv_Value resolve_json_value(Arena *arena, Jsonv_Value v, Jsonv_Arena *jsonv_a
 int32_t serialize_jsonv_value(Arena *arena, Jsonv_Value v, char **out_str);
 bool is_truthy(Jsonv_Value v);
 long parse_duration_ms(StringView sv);
+struct Jsonata_Env; // opaque forward declaration
+typedef struct Jsonata_Arena Jsonata_Arena;
+Jsonata_Arena *nestor_jsonata_arena_new(Arena *arena);
 
 #endif

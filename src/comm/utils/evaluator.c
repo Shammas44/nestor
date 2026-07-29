@@ -3,6 +3,106 @@
 #include <jsonata/jsonata.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+typedef struct {
+  const char *path;
+  Jsonata_Arena *jsonata_arena;
+} NestorLazyContext;
+
+typedef struct {
+  Jsonata_Value *result;
+  Jsonata_Arena *arena;
+} LazyMatchContext;
+
+static void nestor_lazy_match_cb(void *user_data, Jsonata_ValType type, const char *val, size_t val_len) {
+  /*#region*/
+  LazyMatchContext *ctx = (LazyMatchContext *)user_data;
+  Jsonata_Value *res = jsonata_value_alloc(ctx->arena);
+  if (!res) return;
+  res->type = type;
+  if (type == JSONATA_VAL_STRING) {
+    char *str_buf = (jsonata_arena_alloc)(ctx->arena, val_len + 1);
+    if (str_buf) {
+      memcpy(str_buf, val, val_len);
+      str_buf[val_len] = '\0';
+      res->u.s.ptr = str_buf;
+      res->u.s.len = val_len;
+    }
+  } else if (type == JSONATA_VAL_NUMBER) {
+    char *tmp = (jsonata_arena_alloc)(ctx->arena, val_len + 1);
+    if (tmp) {
+      memcpy(tmp, val, val_len);
+      tmp[val_len] = '\0';
+      res->u.n = atof(tmp);
+    }
+  } else if (type == JSONATA_VAL_BOOL) {
+    res->u.b = (val_len == 4 && strncmp(val, "true", 4) == 0);
+  }
+  ctx->result = res;
+  /*#endregion*/
+}
+
+static Jsonata_Value *nestor_lazy_get_property(void *context, const char *key, size_t key_len) {
+  /*#region*/
+  NestorLazyContext *lazy_ctx = (NestorLazyContext *)context;
+  int fd = open(lazy_ctx->path, O_RDONLY);
+  if (fd < 0) return NULL;
+
+  struct stat st;
+  if (fstat(fd, &st) < 0 || st.st_size == 0) {
+    close(fd);
+    return NULL;
+  }
+
+  void *addr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (addr == MAP_FAILED) {
+    close(fd);
+    return NULL;
+  }
+
+  char *key_cstr = (char *)jsonata_arena_alloc(lazy_ctx->jsonata_arena, key_len + 1);
+  if (!key_cstr) {
+    munmap(addr, st.st_size);
+    close(fd);
+    return NULL;
+  }
+  memcpy(key_cstr, key, key_len);
+  key_cstr[key_len] = '\0';
+
+  LazyMatchContext match_ctx = { .result = NULL, .arena = lazy_ctx->jsonata_arena };
+
+  Jsonata_StreamFilter *filter = jsonata_stream_filter_create(key_cstr, nestor_lazy_match_cb, &match_ctx, lazy_ctx->jsonata_arena);
+  if (!filter) {
+    munmap(addr, st.st_size);
+    close(fd);
+    return NULL;
+  }
+
+  jsonv_sax_callbacks callbacks = {
+    .on_begin_object = jsonata_stream_filter_on_begin_object,
+    .on_end_object = jsonata_stream_filter_on_end_object,
+    .on_begin_array = jsonata_stream_filter_on_begin_array,
+    .on_end_array = jsonata_stream_filter_on_end_array,
+    .on_object_key = jsonata_stream_filter_on_object_key,
+    .on_string = jsonata_stream_filter_on_string,
+    .on_number = jsonata_stream_filter_on_number,
+    .on_boolean = jsonata_stream_filter_on_boolean,
+    .on_null = jsonata_stream_filter_on_null
+  };
+
+  jsonv_parse_sax((const unsigned char *)addr, st.st_size, &callbacks, filter);
+
+  munmap(addr, st.st_size);
+  close(fd);
+
+  return match_ctx.result;
+  /*#endregion*/
+}
 
 void *na_alloc(Arena *arena, size_t size);
 
@@ -111,6 +211,21 @@ static Jsonata_Value *convert_jsonv_to_jsonata_impl(Jsonata_Arena *jsonata_arena
     case JSONV_VAL_OBJ: {
       res->type = JSONATA_VAL_OBJECT;
       Jsonv_Obj *obj = v.as.p;
+
+      // If the object contains a streaming file path, delegate property lookups
+      // dynamically to prevent loading the entire payload in RAM.
+      Jsonv_Value stream_val;
+      if (jsonv_obj_get(obj, "_stream_file_path", &stream_val) && stream_val.tag == JSONV_VAL_STRING) {
+        res->get_property = nestor_lazy_get_property;
+        NestorLazyContext *lazy_ctx = (NestorLazyContext *)jsonata_arena_alloc(jsonata_arena, sizeof(NestorLazyContext));
+        if (lazy_ctx) {
+          lazy_ctx->path = (const char *)stream_val.as.p;
+          lazy_ctx->jsonata_arena = jsonata_arena;
+          res->context = lazy_ctx;
+        }
+        break;
+      }
+
       int len = jsonv_obj_length(obj);
       res->u.obj.count = len;
       if (len > 0) {
@@ -209,6 +324,12 @@ static Jsonv_Value convert_jsonata_to_jsonv(Arena *our_arena, Jsonv_Arena *jsonv
     default:
       return jsonv_val_undefined();
   }
+  /*#endregion*/
+}
+
+Jsonata_Arena *nestor_jsonata_arena_new(Arena *arena) {
+  /*#region*/
+  return jsonata_arena_new_custom(&my_jsonata_ops, arena);
   /*#endregion*/
 }
 

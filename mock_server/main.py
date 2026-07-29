@@ -112,6 +112,22 @@ async def get_employee_details(region_id: str, emp_id: str):
     from fastapi import HTTPException
     raise HTTPException(status_code=404, detail="Employee not found")
 
+@app.get("/api/bigdata/{size_mb}")
+async def get_big_data(size_mb: float, nodata: bool = False):
+    num_elements = int(size_mb * 1024)
+    if nodata:
+        return {
+            "size_mb": size_mb,
+            "element_count": num_elements
+        }
+    chunk = "A" * 1024
+    data = [{"id": i, "payload": chunk} for i in range(num_elements)]
+    return {
+        "size_mb": size_mb,
+        "element_count": num_elements,
+        "data": data
+    }
+
 # Catch-all endpoint for general echos/diagnostics
 @app.api_route("/{path_name:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def catch_all(request: Request, path_name: str):

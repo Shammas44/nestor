@@ -407,3 +407,30 @@ TIMED_TEST(examples, showcase_advanced_features, init, fini)
   arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST
+
+TIMED_TEST(examples, bigdata_test, init, fini)
+/*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  transport_mock_add_response("127.0.0.1:8080/api/bigdata/2.0", "GET", 200, "{\"size_mb\": 2.0, \"element_count\": 3, \"data\": [{\"id\": 10}, {\"id\": 20}, {\"id\": 30}]}");
+  transport_mock_add_response("127.0.0.1:8080/api/transform", "POST", 200, "{\"status\": \"ok\", \"received_body\": {\"records\": [{\"id\": 10}, {\"id\": 20}, {\"id\": 30}]}}");
+
+  Jsonv_Value ctx = run_example_test(arena, "examples/11_bigdata_test.json");
+  int64_t status = get_step_status_code(arena, ctx.as.p, "fetch_bigdata", "get_payload");
+  cr_assert_eq(status, 200);
+
+  Jsonv_Value jobs_val;
+  cr_assert(jsonv_obj_get(ctx.as.p, "jobs", &jobs_val));
+  Jsonv_Value loop_outcome;
+  cr_assert(jsonv_obj_get(jobs_val.as.p, "process_chunks", &loop_outcome));
+  Jsonv_Value steps_val;
+  cr_assert(jsonv_obj_get(loop_outcome.as.p, "steps", &steps_val));
+  Jsonv_Value post_chunk_arr;
+  cr_assert(jsonv_obj_get(steps_val.as.p, "post_chunk", &post_chunk_arr));
+  cr_assert_eq(post_chunk_arr.tag, JSONV_VAL_ARRAY);
+  cr_assert(jsonv_arr_length(post_chunk_arr.as.p) > 0);
+
+  unlink(".nestor_stream_get_payload.json");
+  arena_destroy(arena);
+/*#endregion*/
+END_TIMED_TEST
+

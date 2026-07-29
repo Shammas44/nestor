@@ -18,3 +18,5 @@ mismatches
 tags
 .venv
 mock_server.log
+.test_*
+.nestor_*
