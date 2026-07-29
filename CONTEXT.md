@@ -56,6 +56,26 @@ _Avoid_: SingleEntryPointRule, JoinedValidation
 A dedicated job type that marks the explicit exit point of a workflow path, evaluating a deterministic outcome value.
 _Avoid_: ExitJob, EndNode
 
+**VariableVisibility**:
+The scoping boundary of a job variable, either private (internal to step execution and omitted from serialized storage) or public (exported to downstream jobs).
+_Avoid_: VariableScope, LocalExport
+
+**StepProjection**:
+A step-level output mapping that filters response payloads and releases raw buffer data from memory immediately on completion.
+_Avoid_: BodyFilter, ResponseTruncator
+
+**ProviderConfiguration**:
+A root-level declaration initializing shared session handles (connection pools, sockets, authentication headers) for execution steps.
+_Avoid_: SessionPool, ConnectionConfig
+
+**StateBackend**:
+A state serialization subsystem saving active stack frames, queues, and registers to `.nestor.tfstate` for workflow suspension and locking.
+_Avoid_: ContextPersister, StateLogger
+
+**DeclarativeProvider**:
+A YAML provider contract mapping operations directly to Nestor's native HTTP, SQL, or plugin runners without C compilation.
+_Avoid_: NoCodePlugin, WrapperProvider
+
 ## Example Dialogue
 
 **Developer**: How do we prevent **Steps** inside a **Job** from polluting each other's output?
