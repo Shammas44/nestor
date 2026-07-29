@@ -143,8 +143,8 @@ int main(int argc, char **argv) {
         arena_destroy(arena);
         return 1;
       }
-      printf("Plan succeeded: Loaded %size workflows, %size providers. Zero contract or dependency cycles detected.\n",
-             (int)map.workflow_count, (int)map.provider_count);
+      printf("Plan succeeded: Loaded %zu workflows, %zu providers. Zero contract or dependency cycles detected.\n",
+             map.workflow_count, map.provider_count);
       arena_destroy(arena);
       return 0;
     } else if (strcmp(argv[1], "compile") == 0) {
