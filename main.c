@@ -132,6 +132,69 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Warning: Failed to initialize SQLite cache database\n");
   }
 
+  // Check subcommands: plan, compile, apply
+  if (argc > 1) {
+    if (strcmp(argv[1], "plan") == 0) {
+      const char *proj_dir = argc > 2 ? argv[2] : ".";
+      WorkspaceMap map;
+      int32_t load_res = workspace_load_directory(arena, proj_dir, &map);
+      if (load_res != ERR_SUCCESS) {
+        fprintf(stderr, "ERR_INVALID_CONTRACT: Plan failed with code %d\n", load_res);
+        arena_destroy(arena);
+        return 1;
+      }
+      printf("Plan succeeded: Loaded %size workflows, %size providers. Zero contract or dependency cycles detected.\n",
+             (int)map.workflow_count, (int)map.provider_count);
+      arena_destroy(arena);
+      return 0;
+    } else if (strcmp(argv[1], "compile") == 0) {
+      const char *proj_dir = argc > 2 ? argv[2] : ".";
+      const char *out_path = "output.nbc";
+      for (int i = 2; i < argc - 1; i++) {
+        if (strcmp(argv[i], "-o") == 0) {
+          out_path = argv[i + 1];
+        }
+      }
+      WorkspaceMap map;
+      int32_t load_res = workspace_load_directory(arena, proj_dir, &map);
+      if (load_res != ERR_SUCCESS) {
+        fprintf(stderr, "Compile error loading workspace: %d\n", load_res);
+        arena_destroy(arena);
+        return 1;
+      }
+      int32_t bc_res = bytecode_compile_workspace(arena, &map, out_path);
+      if (bc_res != ERR_SUCCESS) {
+        fprintf(stderr, "Bytecode compile failed with code %d\n", bc_res);
+        arena_destroy(arena);
+        return 1;
+      }
+      printf("Compiled workspace to %s successfully.\n", out_path);
+      arena_destroy(arena);
+      return 0;
+    } else if (strcmp(argv[1], "apply") == 0) {
+      if (argc > 2 && strstr(argv[2], ".nbc")) {
+        Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(NULL);
+        NVMContext nvm_ctx;
+        int32_t init_res = nvm_init_from_file(&nvm_ctx, arena, jsonv_arena, argv[2]);
+        if (init_res != ERR_SUCCESS) {
+          fprintf(stderr, "Failed to map NBC file %s: %d\n", argv[2], init_res);
+          arena_destroy(arena);
+          return 1;
+        }
+        int32_t exec_res = nvm_execute_loop(&nvm_ctx);
+        nvm_close(&nvm_ctx);
+        if (exec_res != ERR_SUCCESS) {
+          fprintf(stderr, "NVM execution error %d\n", exec_res);
+          arena_destroy(arena);
+          return 1;
+        }
+        printf("NVM Execution Completed Successfully.\n");
+        arena_destroy(arena);
+        return 0;
+      }
+    }
+  }
+
   // 2. Read workflow definition from standard input
   size_t yaml_len = 0;
   char *yaml = read_stdin(arena, &yaml_len);
@@ -140,6 +203,7 @@ int main(int argc, char **argv) {
     arena_destroy(arena);
     return 1;
   }
+
 
   // 3. Parse and Compile the Workflow
   WorkflowAST ast;

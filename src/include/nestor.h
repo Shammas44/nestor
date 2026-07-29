@@ -7,6 +7,12 @@
 #include "compiler.h"
 #include "evaluator.h"
 #include "runner.h"
+#include "provider.h"
+#include "loader.h"
+#include "types.h"
+#include "bytecode.h"
+#include "nvm.h"
 
-#endif 
+#endif
+ 
 
