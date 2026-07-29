@@ -226,6 +226,36 @@ Execute `onboard.nbc` against a mock customer input and verify it completes succ
 
 ---
 
+## 3.5 Phase 1.5: Declarative C Pipelines & Terraform Paradigms
+
+This phase incorporates Terraform-like design patterns to optimize scope encapsulation, memory usage, session management, and contract testing.
+
+### Stage 14: Job/Step Variables (Public vs. Private)
+* **Objective**: Introduce a variables block at the Job/Step level.
+* **Mechanism**: Sequential ordered resolution with compile-time cycle check (`ERR_CYCLIC_DEP`). Private variables (`visibility: private`) simplify expressions locally and bypass db state serialization to conserve memory. Public variables (`visibility: public`) act as job boundaries (`jobs.<id>.outputs.<name>`).
+* **Naming**: Enforce snake_case/camelCase variables to avoid subtraction parser conflicts.
+
+### Stage 14.5: Step-Level Outcome Projection
+* **Objective**: Enable memory minimization for large response bodies.
+* **Mechanism**: Allow steps to declare an `outputs` mapping projection; release the raw response payload from the arena immediately after step execution completes.
+
+### Stage 15: Global Provider Configurations & Session Reuse
+* **Objective**: Centralize provider block setups.
+* **Mechanism**: Open TCP/TLS session pools and database pools once globally and inject secrets securely at the provider boundary.
+
+### Stage 15.5: State Backends & Execution Locking (.nestor.tfstate)
+* **Objective**: Stateful serialization for long-running workflows.
+* **Mechanism**: Dump active variables stack frames and scheduler queue states to a `.nestor.tfstate` file, implementing state locks for concurrent resilience.
+
+### Stage 16: Data Sources vs. Resources Split
+* **Objective**: Distinguish read-only operations from stateful mutations.
+* **Mechanism**: Allow aggressive caching and concurrent runs for Data Sources, while serializing Resource updates.
+
+### Stage 16.5: Declarative YAML Providers
+* **Objective**: Support no-code provider creation using YAML contracts mapping operations to native features, SQL, or scripts.
+
+---
+
 ## 4. Phase 2: Gateway Daemon & Business APIs (Future Server)
 
 Phase 2 transitions the Integration Runtime to Server Mode, wrapping declarative workflows in HTTP endpoints.

@@ -20,18 +20,39 @@
 - [x] **Stage 8.4: Loop Iteration Memory Compaction & Sub-Arenas**
 - [x] **Stage 8.5: Dedicated Stderr Stream Logging for Subprocess Plugins**
 - [x] **Stage 8.6: Interactive Unix Socket IPC API for Dynamic Plugin Context Queries**
-- [ ] **Stage 8.7: SQLite-Backed Cache & Eviction Strategy**
-- [ ] **Stage 8.8: Edge-Based Conditional Execution**
-- [ ] **Stage 8.9: Native JSONata Transform Job**
-- [ ] **Stage 8.10: Dynamic Plugin SDK & Subprocess Sandboxing**
-- [x] **Architectural Refactorings**:
-  - [x] **Candidate 1**: Deepen Subprocess Plugin Executor (`plugin.h`, `plugin.c`)
-  - [x] **Candidate 2**: Decouple HTTP execution via Transport Seam (`transport.h`, `transport.c`)
-  - [x] **Candidate 3**: Unify Expression Evaluation, Interpolation, and Duration parsing (`evaluator.h`, `evaluator.c`)
+- [x] **Stage 8.7: SQLite-Backed Cache & Eviction Strategy**
+- [x] **Stage 8.8: Edge-Based Conditional Execution**
+- [x] **Stage 8.9: Native JSONata Transform Job**
+- [x] **Stage 8.10: Dynamic Plugin SDK & Subprocess Sandboxing**
+- [x] **Stage 9: Provider SDK & Service Provider Interface (SPI)**
+- [x] **Stage 9.5: Multi-File Workspace Loader & Dependency Compiler**
+- [x] **Stage 10: Canonical Type Mapping & Transcoding**
+- [x] **Stage 10.5: Nested Sub-Workflow Execution Stack**
+- [x] **Stage 11: Static Schema Contract Verification & CLI Tooling**
+- [x] **Stage 11.5: Bytecode Compiler & NBC Exporter**
+- [x] **Stage 11.7: Nestor VM (NVM) Runtime Execution Loop**
 
+---
+
+## Phase 1.5: Declarative C Pipelines & Terraform Paradigms (Upcoming)
+
+- [ ] **Stage 14: Job/Step Variables (Public vs. Private)**
+  - [ ] Enforce snake_case/camelCase keys and resolve cycle checks (`ERR_CYCLIC_DEP`)
+  - [ ] Support private variable scope (non-serialized) and public outputs (`jobs.<id>.outputs.<name>`)
+- [ ] **Stage 14.5: Step-Level Outcome Projection**
+  - [ ] Project subset fields immediately and release large response payloads from arena memory
+- [ ] **Stage 15: Global Provider Configurations & Session Reuse**
+  - [ ] Centralized provider blocks for Postgres/HTTP pooling and secrets injection
+- [ ] **Stage 15.5: State Backends & Execution Locking (.nestor.tfstate)**
+  - [ ] Serialize state frames and lock engine runs on asynchronous gates
+- [ ] **Stage 16: Data Sources vs. Resources Split**
+  - [ ] Cache read-only data sources; serialize write resources under strict order
+- [ ] **Stage 16.5: Declarative YAML Providers**
+  - [ ] Allow no-code YAML provider mappings to wrap native features, SQL, and plugins
+
+---
 
 ## Phase 2: Long-Lived Workflows (Stateful Server)
 
-- [ ] **Stage 9: Event-Sourced Database Persistence**
-- [ ] **Stage 10: Asynchronous State Suspension & Correlation Resuming**
-- [ ] **Stage 11: Daemon API & Coordination Daemon (`libmicrohttpd`)**
+- [ ] **Stage 12: Gateway Daemon & HTTP REST Mapping**
+- [ ] **Stage 13: Webhook Routing & Correlation Resuming**
