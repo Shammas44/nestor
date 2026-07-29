@@ -108,7 +108,7 @@ TEST_APP_E2E := $(BIN_DIR)/test_runner_e2e
 .PHONY: all static shared test test_unit test_e2e main_d run run_test run_test_unit run_test_e2e clean install uninstall bear dirs main run_d inspect
 
 # --- Main Targets ---
-all: static main plugins/mock_plugin bin/nestor-plugin-runner test_unit test_e2e
+all: static main plugins/mock_plugin plugins/test_dynamic_plugin.so bin/nestor-plugin-runner test_unit test_e2e
 
 bear: clean dirs
 	@echo "Generating compile_commands.json..."
@@ -144,12 +144,12 @@ $(MAIN_APP_STATIC): $(OBJ_DIR)/main.o $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_USER_SHARED_LIBS)
 
 # --- Test Executables ---
-test_unit: static plugins/mock_plugin $(TEST_APP_UNIT)
+test_unit: static plugins/mock_plugin plugins/test_dynamic_plugin.so $(TEST_APP_UNIT)
 $(TEST_APP_UNIT): $(UNIT_TEST_OBJS) $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 	@echo "[CC] Linking $@"
 	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_TEST_LIBS) $(LINK_USER_SHARED_LIBS)
 
-test_e2e: static plugins/mock_plugin $(TEST_APP_E2E)
+test_e2e: static plugins/mock_plugin plugins/test_dynamic_plugin.so $(TEST_APP_E2E)
 $(TEST_APP_E2E): $(E2E_TEST_OBJS) $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 	@echo "[CC] Linking $@"
 	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_TEST_LIBS) $(LINK_USER_SHARED_LIBS)
@@ -158,7 +158,12 @@ plugins/mock_plugin: tests/fixtures/mock_plugin.c
 	@mkdir -p plugins
 	@$(CC) -O2 $< -o $@
 
+plugins/test_dynamic_plugin.so: tests/fixtures/test_dynamic_plugin.c
+	@mkdir -p plugins
+	@$(CC) -O2 -shared -fPIC -Isrc/include $< -o $@
+
 test: test_unit test_e2e
+
 
 # --- Compile Rules ---
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | dirs
@@ -218,4 +223,4 @@ inspect:
 clean:
 	@echo "Clean targets"
 	@rm -rf $(BIN_DIR)
-	@rm -f plugins/mock_plugin
+	@rm -f plugins/mock_plugin plugins/test_dynamic_plugin.so

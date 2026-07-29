@@ -239,9 +239,6 @@ Test(stage5, http_step_execution) {
 
 Test(stage5, plugin_step_execution) {
   /*#region*/
-  // 1. Compile mock plugin binary
-  system("mkdir -p ./plugins && gcc -O2 tests/fixtures/mock_plugin.c -o ./plugins/mock_plugin");
-
   // 2. Prepare Workflow YAML
   const char *yaml = 
     "{\n"

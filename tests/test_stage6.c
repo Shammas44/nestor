@@ -9,8 +9,6 @@
 static void init() {
   /*#region*/
   test_init();
-  // Ensure the mock plugin is built
-  system("mkdir -p ./plugins && gcc -O2 tests/fixtures/mock_plugin.c -o ./plugins/mock_plugin");
   /*#endregion*/
 }
 

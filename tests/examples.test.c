@@ -414,7 +414,7 @@ TIMED_TEST(examples, bigdata_test, init, fini)
   transport_mock_add_response("127.0.0.1:8080/api/bigdata/2.0", "GET", 200, "{\"size_mb\": 2.0, \"element_count\": 3, \"data\": [{\"id\": 10}, {\"id\": 20}, {\"id\": 30}]}");
   transport_mock_add_response("127.0.0.1:8080/api/transform", "POST", 200, "{\"status\": \"ok\", \"received_body\": {\"records\": [{\"id\": 10}, {\"id\": 20}, {\"id\": 30}]}}");
 
-  Jsonv_Value ctx = run_example_test(arena, "examples/11_bigdata_test.json");
+  Jsonv_Value ctx = run_example_test(arena, "examples/11_bigdata_test.yaml");
   int64_t status = get_step_status_code(arena, ctx.as.p, "fetch_bigdata", "get_payload");
   cr_assert_eq(status, 200);
 
