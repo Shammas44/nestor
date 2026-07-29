@@ -7,6 +7,8 @@
 #include "cache.h"
 #include <time.h>
 #include <curl/curl.h>
+#include "parser.h"
+#include "compiler.h"
 
 typedef struct ActiveJob ActiveJob;
 static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj);
@@ -242,6 +244,50 @@ int32_t execute_step(Arena *arena, StepNode *step, Jsonv_Arena *jsonv_arena, Jso
     char plugin_path[512];
     StringView uses_sv = step->plugin.uses;
     char *uses_cstr = sv_to_cstring(arena, uses_sv);
+
+    if (strncmp(uses_cstr, "workflows.", 10) == 0) {
+      char sub_path[512];
+      snprintf(sub_path, sizeof(sub_path), "workflows/%s.yaml", uses_cstr + 10);
+      FILE *sf = fopen(sub_path, "r");
+      if (!sf) {
+        snprintf(sub_path, sizeof(sub_path), "workflows/%s.yml", uses_cstr + 10);
+        sf = fopen(sub_path, "r");
+      }
+      if (sf) {
+        fclose(sf);
+        WorkflowAST sub_ast;
+        int32_t parse_status = parser_parse_file(arena, sub_path, &sub_ast);
+        if (parse_status == ERR_SUCCESS) {
+          int32_t compile_status = compile_workflow(arena, &sub_ast);
+          if (compile_status == ERR_SUCCESS) {
+            Jsonv_Arena *sub_jarena = jsonv_ctx_arena(sub_ast.jsonv_ctx);
+            Jsonv_Obj *sub_root_obj = jsonv_obj_new(sub_jarena, NULL);
+            jsonv_obj_set(sub_jarena, sub_root_obj, allocate_jsonv_string(arena, "inputs", 6), resolved_with);
+            Jsonv_Value sub_context = jsonv_val_obj(sub_root_obj);
+
+            int32_t run_res = run_workflow(arena, &sub_ast, &sub_context);
+            long status_code = (run_res == ERR_SUCCESS) ? 0 : 500;
+            Jsonv_Value body_val = jsonv_val_undefined();
+            if (run_res == ERR_SUCCESS) {
+              Jsonv_Value outputs_val;
+              if (jsonv_obj_get(sub_root_obj, "outputs", &outputs_val)) {
+                body_val = outputs_val;
+              }
+            }
+            Jsonv_Obj *outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+            char *k_status_code = allocate_jsonv_string(arena, "status_code", 11);
+            char *k_body = allocate_jsonv_string(arena, "body", 4);
+            jsonv_obj_set(jsonv_arena, outcome_obj, k_status_code, jsonv_val_int(status_code));
+            jsonv_obj_set(jsonv_arena, outcome_obj, k_body, body_val);
+
+            char *step_id_cstr = allocate_jsonv_string(arena, step->id.data, step->id.length);
+            jsonv_obj_set(jsonv_arena, steps_state_obj.as.p, step_id_cstr, jsonv_val_obj(outcome_obj));
+            return run_res;
+          }
+        }
+      }
+    }
+
     if (uses_cstr[0] == '/' || (uses_cstr[0] == '.' && uses_cstr[1] == '/')) {
       snprintf(plugin_path, sizeof(plugin_path), "%s", uses_cstr);
     } else {
