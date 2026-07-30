@@ -10,6 +10,19 @@ typedef struct {
   StringView value;
 } EnvVarAST;
 
+typedef enum {
+  VAR_PRIVATE,
+  VAR_PUBLIC
+} VarVisibility;
+
+typedef struct VariableAST VariableAST;
+struct VariableAST {
+  StringView name;
+  StringView expression;
+  VarVisibility visibility;
+  VariableAST *next;
+};
+
 #define DEP_COND_SUCCESS    (1 << 0)
 #define DEP_COND_FAILURE    (1 << 1)
 #define DEP_COND_SKIP       (1 << 2)
@@ -39,6 +52,7 @@ typedef enum {
 typedef struct StepNode StepNode;
 struct StepNode {
   StringView id;
+  VariableAST *variables_head;
   bool is_http; // true for http, false for plugin/uses
   StringView timeout;
   int retry_attempts;
@@ -77,6 +91,7 @@ struct JobNode {
   NodeType type;
   StringView id;
   StringView name;
+  VariableAST *variables_head;
 
   // Intrusive topological graph pointers
   JobNode *next_sorted;
@@ -159,6 +174,8 @@ typedef struct {
 
   EnvVarAST *env;
   size_t env_count;
+
+  VariableAST *variables_head;
 
   JobNode *jobs_head; // Topologically sorted JobNodes list
   size_t job_count;

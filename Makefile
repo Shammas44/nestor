@@ -147,7 +147,7 @@ $(MAIN_APP_STATIC): $(OBJ_DIR)/main.o $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 test_unit: static plugins/mock_plugin plugins/test_dynamic_plugin.so $(TEST_APP_UNIT)
 $(TEST_APP_UNIT): $(UNIT_TEST_OBJS) $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
 	@echo "[CC] Linking $@"
-	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_TEST_LIBS) $(LINK_USER_SHARED_LIBS)
+	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_TEST_LIBS) $(LINK_USER_SHARED_LIBS) -Wl,-map,bin/test_runner_unit.map
 
 test_e2e: static plugins/mock_plugin plugins/test_dynamic_plugin.so $(TEST_APP_E2E)
 $(TEST_APP_E2E): $(E2E_TEST_OBJS) $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs

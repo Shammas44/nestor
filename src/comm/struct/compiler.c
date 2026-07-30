@@ -4,6 +4,177 @@
 
 void *na_alloc(Arena *arena, size_t size);
 
+static bool is_ident_char(char c) {
+  /*#region*/
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+  /*#endregion*/
+}
+
+static bool expression_references_var(StringView expr, StringView var_name) {
+  /*#region*/
+  if (expr.length < var_name.length) return false;
+  for (size_t i = 0; i <= expr.length - var_name.length; i++) {
+    if (strncmp(expr.data + i, var_name.data, var_name.length) == 0) {
+      // Check boundaries
+      bool before_ok = (i == 0 || !is_ident_char(expr.data[i - 1]));
+      bool after_ok = (i + var_name.length == expr.length || !is_ident_char(expr.data[i + var_name.length]));
+      if (before_ok && after_ok) {
+        return true;
+      }
+    }
+  }
+  return false;
+  /*#endregion*/
+}
+
+static int32_t compile_variables(Arena *arena, Jsonv_Value vars_val, VariableAST **out_head) {
+  /*#region*/
+  if (vars_val.tag != JSONV_VAL_ARRAY) {
+    return ERR_MISSING_VAR;
+  }
+  int len = jsonv_arr_length(vars_val.as.p);
+  VariableAST *head = NULL;
+  VariableAST *tail = NULL;
+  for (int i = 0; i < len; i++) {
+    Jsonv_Value var_item = jsonv_arr_val_at(vars_val.as.p, i);
+    if (var_item.tag != JSONV_VAL_OBJ) return ERR_MISSING_VAR;
+
+    Jsonv_Value v_name, v_expr, v_vis;
+    if (!jsonv_obj_get(var_item.as.p, "name", &v_name) || v_name.tag != JSONV_VAL_STRING) {
+      return ERR_MISSING_VAR;
+    }
+    if (!jsonv_obj_get(var_item.as.p, "expression", &v_expr) || v_expr.tag != JSONV_VAL_STRING) {
+      return ERR_MISSING_VAR;
+    }
+
+    StringView name = { v_name.as.p, jsonv_val_str_len(v_name) };
+    StringView expr = { v_expr.as.p, jsonv_val_str_len(v_expr) };
+
+    // Validate naming rules (snake_case/camelCase): start with alpha/underscore, followed by alnum/underscore.
+    if (name.length == 0) return ERR_MISSING_VAR;
+    if (!((name.data[0] >= 'a' && name.data[0] <= 'z') ||
+          (name.data[0] >= 'A' && name.data[0] <= 'Z') ||
+          name.data[0] == '_')) {
+      return ERR_MISSING_VAR;
+    }
+    for (size_t j = 1; j < name.length; j++) {
+      char c = name.data[j];
+      if (!((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '_')) {
+        return ERR_MISSING_VAR;
+      }
+    }
+
+    VarVisibility visibility = VAR_PRIVATE;
+    if (jsonv_obj_get(var_item.as.p, "visibility", &v_vis) && v_vis.tag == JSONV_VAL_STRING) {
+      StringView vis_sv = { v_vis.as.p, jsonv_val_str_len(v_vis) };
+      if (sv_equals_cstr(vis_sv, "public")) {
+        visibility = VAR_PUBLIC;
+      } else if (sv_equals_cstr(vis_sv, "private")) {
+        visibility = VAR_PRIVATE;
+      } else {
+        return ERR_MISSING_VAR;
+      }
+    }
+
+    VariableAST *var = na_alloc(arena, sizeof(VariableAST));
+    if (!var) return ERR_OOM;
+    memset(var, 0, sizeof(VariableAST));
+    var->name = name;
+    var->expression = expr;
+    var->visibility = visibility;
+
+    if (!head) {
+      head = var;
+    } else {
+      tail->next = var;
+    }
+    tail = var;
+  }
+
+  // Topologically sort variables to check for cycle and define ordered list
+  if (len > 0) {
+    VariableAST **var_arr = na_alloc(arena, len * sizeof(VariableAST *));
+    if (!var_arr) return ERR_OOM;
+    VariableAST *curr = head;
+    for (int i = 0; i < len; i++) {
+      var_arr[i] = curr;
+      curr = curr->next;
+    }
+
+    int *in_degrees = na_alloc(arena, len * sizeof(int));
+    if (!in_degrees) return ERR_OOM;
+    memset(in_degrees, 0, len * sizeof(int));
+
+    for (int i = 0; i < len; i++) {
+      for (int j = 0; j < len; j++) {
+        if (i == j) continue;
+        if (expression_references_var(var_arr[j]->expression, var_arr[i]->name)) {
+          in_degrees[j]++;
+        }
+      }
+    }
+
+    VariableAST **queue = na_alloc(arena, len * sizeof(VariableAST *));
+    if (!queue) return ERR_OOM;
+    int q_head = 0;
+    int q_tail = 0;
+    for (int i = 0; i < len; i++) {
+      if (in_degrees[i] == 0) {
+        queue[q_tail++] = var_arr[i];
+      }
+    }
+
+    VariableAST *sorted_head = NULL;
+    VariableAST *sorted_tail = NULL;
+    int sorted_count = 0;
+
+    while (q_head < q_tail) {
+      VariableAST *u = queue[q_head++];
+      u->next = NULL;
+      if (!sorted_head) {
+        sorted_head = u;
+        sorted_tail = u;
+      } else {
+        sorted_tail->next = u;
+        sorted_tail = u;
+      }
+      sorted_count++;
+
+      for (int i = 0; i < len; i++) {
+        VariableAST *v = var_arr[i];
+        if (v != u && expression_references_var(v->expression, u->name)) {
+          int v_idx = -1;
+          for (int k = 0; k < len; k++) {
+            if (var_arr[k] == v) {
+              v_idx = k;
+              break;
+            }
+          }
+          if (v_idx != -1) {
+            in_degrees[v_idx]--;
+            if (in_degrees[v_idx] == 0) {
+              queue[q_tail++] = v;
+            }
+          }
+        }
+      }
+    }
+
+    if (sorted_count < len) {
+      return ERR_CYCLIC_DEP;
+    }
+    head = sorted_head;
+  }
+
+  *out_head = head;
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
+
 static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_step) {
   /*#region*/
   if (step_val.tag != JSONV_VAL_OBJ)
@@ -103,6 +274,13 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
   if (jsonv_obj_get(step_val.as.p, "retry_delay", &v_ret_dl) && v_ret_dl.tag == JSONV_VAL_STRING) {
     step->retry_delay.data = v_ret_dl.as.p;
     step->retry_delay.length = jsonv_val_str_len(v_ret_dl);
+  }
+  Jsonv_Value v_vars;
+  if (jsonv_obj_get(step_val.as.p, "variables", &v_vars) && v_vars.tag == JSONV_VAL_ARRAY) {
+    int32_t status = compile_variables(arena, v_vars, &step->variables_head);
+    if (status != ERR_SUCCESS) {
+      return status;
+    }
   }
 
   *out_step = step;
@@ -681,6 +859,16 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
     return ERR_OOM;
 
   Jsonv_Value root_val = ast->root_val;
+
+  // Extract workflow root variables
+  Jsonv_Value root_vars;
+  if (jsonv_obj_get(root_val.as.p, "variables", &root_vars) && root_vars.tag == JSONV_VAL_ARRAY) {
+    int32_t status = compile_variables(arena, root_vars, &ast->variables_head);
+    if (status != ERR_SUCCESS) {
+      return status;
+    }
+  }
+
   Jsonv_Value jobs_val;
   if (!jsonv_obj_get(root_val.as.p, "jobs", &jobs_val) || jobs_val.tag != JSONV_VAL_OBJ) {
     return ERR_MISSING_VAR;
@@ -713,6 +901,15 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
     job->id.data = job_id_cstr;
     job->id.length = strlen(job_id_cstr);
     job->execution_state = 0; // PENDING
+
+    // Extract variables at the job level
+    Jsonv_Value v_job_vars;
+    if (jsonv_obj_get(job_spec_val.as.p, "variables", &v_job_vars) && v_job_vars.tag == JSONV_VAL_ARRAY) {
+      int32_t status = compile_variables(arena, v_job_vars, &job->variables_head);
+      if (status != ERR_SUCCESS) {
+        return status;
+      }
+    }
 
     // Extract boundary properties
     Jsonv_Value v_start;

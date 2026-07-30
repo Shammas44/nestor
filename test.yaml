@@ -1,0 +1,54 @@
+version: 2.0.0
+name: SWAPI test
+'on':
+  manual: {}
+jobs:
+
+  # This is a comment
+  fork_queries:
+    type: fork
+    start: true
+    branches:
+    - fetch_xwing
+    - fetch_falcon
+
+  # This is a comment
+  fetch_xwing:
+    type: task
+    steps:
+    - id: get_xwing
+      http:
+        method: GET
+        url: https://swapi.dev/api/starships/12/
+
+  # This is a comment
+  fetch_falcon:
+    type: task
+    steps:
+    - id: get_falcon
+      http:
+        method: GET
+        url: https://swapi.dev/api/starships/10/
+
+  # This is a comment
+  join_fleet:
+    type: join
+    strategy: all
+    depends_on:
+    - fetch_xwing
+    - fetch_falcon
+
+  # This is a comment
+  evaluate_fleet:
+    type: transform
+    depends_on:
+    - join_fleet
+    spec:
+      expression: |
+        ${{ 
+          $number(jobs.fetch_xwing.steps.get_xwing.body.passengers) + 
+          $number(jobs.fetch_falcon.steps.get_falcon.body.passengers) 
+        }}
+    return:
+      total_passengers: ${{ jobs.evaluate_fleet.result }}
+      value: ${{2 + 2}}

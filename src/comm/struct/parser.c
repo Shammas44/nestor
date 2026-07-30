@@ -119,6 +119,8 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
     return ERR_OOM;
   }
 
+  memset(out_ast, 0, sizeof(WorkflowAST));
+
   // Create jsonv arena via our custom allocator operations mapping directly into our Arena
   Jsonv_Arena *jsonv_arena = jsonv_arena_new_custom(&my_jsonv_ops, arena);
   if (!jsonv_arena) {

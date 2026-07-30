@@ -149,11 +149,64 @@ Performs inline data mappings using JSONata expressions, publishing the result u
 
 ---
 
-## 3. Step Definitions
+## 3. Scoping & Variables (Public vs. Private)
+
+Nestor supports declaring scoped variables at the workflow root, job, or step level to calculate values dynamically using expression bindings.
+
+```json
+{
+  "version": "2.0.0",
+  "name": "My Orchestration Scenario",
+  "on": { "manual": {} },
+  "variables": [
+    {
+      "name": "global_const",
+      "expression": "'hello'"
+    }
+  ],
+  "jobs": {
+    "job1": {
+      "type": "task",
+      "variables": [
+        {
+          "name": "job_var",
+          "expression": "global_const & ' world'"
+        }
+      ],
+      "steps": [
+        {
+          "id": "step_one",
+          "variables": [
+            {
+              "name": "step_var",
+              "expression": "job_var & '!'",
+              "visibility": "public"
+            }
+          ],
+          "http": { "method": "GET", "url": "https://api.example.com" }
+        }
+      ]
+    }
+  }
+}
+```
+
+### 3.1 Variable Visibility & Scoping
+Variables accept a `"visibility"` property (`"private"` or `"public"`), defaulting to `"private"`:
+* **`private`**: The variable is only accessible locally within the job/step's execution stack. It is evaluated in-memory and is excluded from SQLite DB state serialization to optimize database size.
+* **`public`**: The variable is exposed to downstream execution nodes, serialized, and published under the job outcomes at `jobs.<job_id>.outputs.<var_name>`.
+
+### 3.2 Cycle Checks & Name Validation
+* **Cycle Check**: During compilation, Nestor topologically sorts variable dependencies. Any cyclic references (e.g. `var_a` referencing `var_b` which references `var_a`) will fail compilation with `ERR_CYCLIC_DEP`.
+* **Name Validation**: Variable names must follow standard naming rules (snake_case/camelCase: must start with an alpha character or underscore, followed only by alphanumeric characters or underscores). Invalid names fail compilation.
+
+---
+
+## 4. Step Definitions
 
 Under `"type": "task"` jobs, you declare an array of steps. There are two primary step configurations:
 
-### 3.1 HTTP Steps
+### 4.1 HTTP Steps
 Performs non-blocking HTTP requests using `curl_multi`.
 * **Properties**: `method`, `url`, `headers`, `body`, `timeout`, `stream`, `chunk_size`
   * **`stream`**: A boolean flag (`true`/`false`). When enabled, the HTTP response payload is streamed directly to a temporary file on disk (`.nestor_stream_<step_id>.json`) in chunked blocks of memory to prevent storing large DOMs in RAM.
@@ -179,7 +232,7 @@ Performs non-blocking HTTP requests using `curl_multi`.
 }
 ```
 
-### 3.2 Plugin Steps (`uses`)
+### 4.2 Plugin Steps (`uses`)
 Invokes C SDK libraries or standalone executables.
 * **`uses`**: The name of the plugin (resolved dynamically) or a file path.
 * **`sandboxed`**:
@@ -199,7 +252,7 @@ Invokes C SDK libraries or standalone executables.
 
 ---
 
-## 4. Fine-Grained Edge Dependencies
+## 5. Fine-Grained Edge Dependencies
 
 When a job declares dependencies using `"depends_on"`, it can specify conditions to refine exactly when the edge is considered satisfied:
 
@@ -223,23 +276,23 @@ When a job declares dependencies using `"depends_on"`, it can specify conditions
 
 ---
 
-## 5. Caching and Observability Features
+## 6. Caching and Observability Features
 
-### 5.1 SQLite-Backed Job Cache
+### 6.1 SQLite-Backed Job Cache
 Nestor automatically caches task outcomes (status codes, outputs, response bodies) in a SQLite DB file. It uses SHA-256 keys derived from the job type, specification parameters, inputs, and active environment.
 * **Cache Revalidation**: Supports HTTP revalidation. If a cached response has `ETag` or `Last-Modified` headers, subsequent runs automatically send `If-None-Match` or `If-Modified-Since` headers to the server. If the server returns `304 Not Modified`, Nestor restores the cached payload.
 * **Eviction Policies**: Employs TTL (Time-To-Live) verification and LRU (Least-Recently Used) eviction to automatically prune old entries.
 
-### 5.2 Observability & Redaction
+### 6.2 Observability & Redaction
 Employs a high-speed Aho-Corasick keyword matching trie to identify sensitive keys (e.g. `secrets` block) on the fly, redacting them (`***`) automatically in all stderr/stdout stream printouts and workspace outputs before writing files.
 
 ---
 
-## 6. Deterministic Graph Boundaries
+## 7. Deterministic Graph Boundaries
 
 Nestor enforces strict safety guarantees regarding workflow execution and concurrent process lifecycles through deterministic graph boundaries:
 
-### 6.1 Start Boundary (Single Entry Point)
+### 7.1 Start Boundary (Single Entry Point)
 A workflow must declare a single starting job:
 * **Implicit Start**: By default, if exactly one job has `dependency_count == 0` (no `depends_on`), the compiler infers it as the entry point. If multiple root jobs exist and none are marked `"start": true`, compilation fails.
 * **Explicit Start**: Setting `"start": true` on a job forces it to be the entry point. Only **one** job in a scenario may be marked as start. If multiple are marked, compilation fails.
@@ -252,7 +305,7 @@ A workflow must declare a single starting job:
 }
 ```
 
-### 6.2 End Boundary & Custom Return Expressions
+### 7.2 End Boundary & Custom Return Expressions
 A workflow can designate terminal exit jobs using `"end"` or `"return"` properties:
 * **`end`** (`boolean`): Designates the job as a terminal exit point. When it completes successfully, the scheduler halts execution immediately and returns the job's outcomes under the top-level `"outputs"` key in the final context.
 * **`return`** (`expression` / `object`): Designates the job as a terminal exit point and evaluates a custom JSONata expression or maps a nested JSON structure (resolving placeholders) to be bound to the top-level `"outputs"` key.
@@ -272,7 +325,7 @@ A workflow can designate terminal exit jobs using `"end"` or `"return"` properti
 }
 ```
 
-### 6.3 Join Dominance Concurrency Check
+### 7.3 Join Dominance Concurrency Check
 To prevent dangling concurrent branches or race conditions, any path traversing a `fork` job node **must** pass through a `join` job node before hitting any exit node (where `is_end == true` or a `return` expression is defined).
 If any concurrent branch of a `fork` reaches an exit job without a synchronizing `join`, compilation fails.
 
