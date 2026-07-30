@@ -28,6 +28,7 @@
 typedef struct ActiveJob ActiveJob;
 static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj);
 static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, JobNode *job, ActiveJob *aj_out);
+static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, ActiveJob *aj, Transport *transport);
 
 static void *my_jsonv_arena_alloc(void *user_data, size_t size) {
   /*#region*/
@@ -1364,6 +1365,30 @@ static bool handle_step_failure(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Va
   /*#endregion*/
 }
 
+static int32_t apply_step_fallback(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj, WorkflowAST *ast, Transport *transport) {
+  /*#region*/
+  StepNode *step = aj->curr_step;
+  fprintf(stderr, "STEP FAILURE. Applying fallback for step %.*s...\n",
+          (int)step->id.length, step->id.data);
+
+  Jsonv_Obj *outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+  char *k_status_code = allocate_jsonv_string(arena, "status_code", 11);
+  char *k_body = allocate_jsonv_string(arena, "body", 4);
+  char *k_stderr = allocate_jsonv_string(arena, "stderr", 6);
+  jsonv_obj_set(jsonv_arena, outcome_obj, k_status_code, jsonv_val_int(200));
+  jsonv_obj_set(jsonv_arena, outcome_obj, k_body, step->fallback);
+  jsonv_obj_set(jsonv_arena, outcome_obj, k_stderr, jsonv_val_str(allocate_jsonv_string(arena, "", 0)));
+
+  save_step_outcome(arena, jsonv_arena, aj, step, outcome_obj);
+
+  aj->curr_step_retry_attempt = 0;
+  aj->curr_step = aj->curr_step->next;
+
+  evaluate_job_variables(arena, jsonv_arena, context_val, aj->job, aj->local_vars);
+  return advance_active_job(arena, jsonv_arena, ast, context_val, aj, transport);
+  /*#endregion*/
+}
+
 static void process_ipc_request(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, int client_fd, const char *req_str) {
   /*#region*/
   Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
@@ -2472,6 +2497,19 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
               aj_http = aj_http->next;
               continue;
             }
+            if (status_code >= 400 && aj_http->curr_step->has_on_error) {
+              transport->ops->cleanup_request(transport, aj_http->easy_handle);
+              aj_http->easy_handle = NULL;
+              int32_t comp_status = apply_step_fallback(arena, jsonv_arena, context_val, aj_http, ast, transport);
+              if (comp_status != ERR_SUCCESS) {
+                pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
+                ret_val = comp_status;
+                goto cleanup;
+              }
+              pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
+              aj_http = aj_http->next;
+              continue;
+            }
             int32_t comp_status = complete_http_step_async(arena, jsonv_arena, aj_http, status_code);
             if (comp_status != ERR_SUCCESS) {
               pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
@@ -2486,6 +2524,19 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
             if (handle_step_failure(eff_arena, jsonv_arena, context_val, aj_http, "HTTP transport error")) {
               transport->ops->cleanup_request(transport, aj_http->easy_handle);
               aj_http->easy_handle = NULL;
+              pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
+              aj_http = aj_http->next;
+              continue;
+            }
+            if (aj_http->curr_step->has_on_error) {
+              transport->ops->cleanup_request(transport, aj_http->easy_handle);
+              aj_http->easy_handle = NULL;
+              int32_t comp_status = apply_step_fallback(arena, jsonv_arena, context_val, aj_http, ast, transport);
+              if (comp_status != ERR_SUCCESS) {
+                pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
+                ret_val = comp_status;
+                goto cleanup;
+              }
               pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
               aj_http = aj_http->next;
               continue;
@@ -2531,10 +2582,32 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
               aj_proc = aj_proc->next;
               continue;
             }
+            if (aj_proc->curr_step->has_on_error) {
+              int32_t comp_status = apply_step_fallback(arena, jsonv_arena, context_val, aj_proc, ast, transport);
+              if (comp_status != ERR_SUCCESS) {
+                pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
+                ret_val = comp_status;
+                goto cleanup;
+              }
+              pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
+              aj_proc = aj_proc->next;
+              continue;
+            }
             complete_plugin_step_async(arena, jsonv_arena, aj_proc, -4);
             aj_proc->job->execution_state = STATE_FAILED;
           } else { // Exited
             if (exit_code != 0 && handle_step_failure(eff_arena, jsonv_arena, context_val, aj_proc, "Plugin exited with non-zero code")) {
+              pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
+              aj_proc = aj_proc->next;
+              continue;
+            }
+            if (exit_code != 0 && aj_proc->curr_step->has_on_error) {
+              int32_t comp_status = apply_step_fallback(arena, jsonv_arena, context_val, aj_proc, ast, transport);
+              if (comp_status != ERR_SUCCESS) {
+                pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
+                ret_val = comp_status;
+                goto cleanup;
+              }
               pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
               aj_proc = aj_proc->next;
               continue;

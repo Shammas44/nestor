@@ -82,6 +82,9 @@ struct StepNode {
     Jsonv_Value args;
   } prov;
 
+  bool has_on_error;
+  Jsonv_Value fallback;
+
   StepNode *next;
 };
 

@@ -77,7 +77,20 @@
                   "additionalProperties": { "type": "string" }
                 },
                 "provider": { "type": "string" },
-                "args": { "type": "object" }
+                "args": { "type": "object" },
+                "on_error": {
+                  "type": "object",
+                  "required": ["fallback"],
+                  "properties": {
+                    "fallback": {
+                      "anyOf": [
+                        { "type": "string" },
+                        { "type": "object" },
+                        { "type": "array" }
+                      ]
+                    }
+                  }
+                }
               }
             }
           },

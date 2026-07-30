@@ -343,6 +343,68 @@ Test(ir_stage15, global_provider_configs) {
   arena_destroy(arena);
 }
 
+Test(ir_stage15_5, step_level_fallbacks) {
+  Arena *arena = arena_create(256 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+      "version: 2.0.0\n"
+      "name: fallback_wf\n"
+      "on: { manual: {} }\n"
+      "jobs:\n"
+      "  job1:\n"
+      "    type: task\n"
+      "    steps:\n"
+      "      - id: failed_http\n"
+      "        http:\n"
+      "          method: \"GET\"\n"
+      "          url: \"http://127.0.0.1:1/nonexistent\"\n"
+      "        on_error:\n"
+      "          fallback:\n"
+      "            status: \"offline\"\n"
+      "            data: [1, 2, 3]\n";
+
+  WorkflowAST ast;
+  int32_t parse_res = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_res, ERR_SUCCESS);
+
+  int32_t compile_res = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_res, ERR_SUCCESS);
+
+  Jsonv_Arena *jarena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jarena, NULL);
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  int32_t run_res = run_workflow(arena, &ast, &context_val);
+  cr_assert_eq(run_res, ERR_SUCCESS, "run_workflow failed with code %d", run_res);
+
+  // Check that the step outcome body was replaced with the fallback object
+  Jsonv_Value jobs_obj;
+  cr_assert(jsonv_obj_get(root_obj, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value job1_obj;
+  cr_assert(jsonv_obj_get(jobs_obj.as.p, "job1", &job1_obj) && job1_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value steps_obj;
+  cr_assert(jsonv_obj_get(job1_obj.as.p, "steps", &steps_obj) && steps_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value failed_http_obj;
+  cr_assert(jsonv_obj_get(steps_obj.as.p, "failed_http", &failed_http_obj) && failed_http_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value body_val;
+  cr_assert(jsonv_obj_get(failed_http_obj.as.p, "body", &body_val) && body_val.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value status_val;
+  cr_assert(jsonv_obj_get(body_val.as.p, "status", &status_val) && status_val.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq((const char *)status_val.as.p, "offline");
+
+  Jsonv_Value data_val;
+  cr_assert(jsonv_obj_get(body_val.as.p, "data", &data_val) && data_val.tag == JSONV_VAL_ARRAY);
+
+  arena_destroy(arena);
+}
+
+
 
 
 

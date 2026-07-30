@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "{\"status\": \"ok\"}"
+echo "Warning: secret PASSWORD_FOUND inside database logs!" >&2

@@ -358,6 +358,15 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
     }
   }
 
+  Jsonv_Value v_on_error;
+  if (jsonv_obj_get(step_val.as.p, "on_error", &v_on_error) && v_on_error.tag == JSONV_VAL_OBJ) {
+    Jsonv_Value v_fallback;
+    if (jsonv_obj_get(v_on_error.as.p, "fallback", &v_fallback)) {
+      step->has_on_error = true;
+      step->fallback = v_fallback;
+    }
+  }
+
   *out_step = step;
   return ERR_SUCCESS;
   /*#endregion*/
