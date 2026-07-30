@@ -1,0 +1,44 @@
+version: "2.0.0"
+name: showcase_phase_1_5
+on: { manual: {} }
+
+variables:
+  - name: global_url
+    expression: "env.BASE_URL != null ? env.BASE_URL : 'http://127.0.0.1:8080'"
+
+providers:
+  my_dec_provider:
+    api_url: "${{ global_url }}"
+
+jobs:
+  read_data_source:
+    type: task
+    variables:
+      - name: local_arg
+        expression: "'hello_variables'"
+        visibility: private
+      - name: public_out
+        expression: "steps.fetch_dec_get.outputs.args_out.path"
+        visibility: public
+    steps:
+      - id: fetch_dec_get
+        provider: my_dec_provider.get_data
+        outputs:
+          args_out: "outputs.args_out"
+      
+      - id: fetch_fallback
+        http:
+          method: GET
+          url: "${{ global_url }}/error"
+        on_error:
+          fallback: { "status": "fallback_applied", "code": 500 }
+        outputs:
+          fallback_status: "body.status"
+
+  write_resource:
+    type: task
+    depends_on:
+      - job: read_data_source
+    steps:
+      - id: fetch_dec_post
+        provider: my_dec_provider.post_data

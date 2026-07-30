@@ -1,0 +1,21 @@
+provider: my_dec_provider
+description: Declarative helper provider
+configuration:
+  api_url: "http://127.0.0.1:8080"
+
+operations:
+  get_data:
+    uses: http
+    args:
+      method: GET
+      url: "${{ configuration.api_url }}/get"
+    outputs:
+      args_out: "body"
+
+  post_data:
+    uses: http
+    args:
+      method: POST
+      url: "${{ configuration.api_url }}/post"
+      body:
+        status: "active"
