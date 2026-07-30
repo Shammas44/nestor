@@ -250,9 +250,78 @@ Invokes C SDK libraries or standalone executables.
 }
 ```
 
+### 4.3 Step-Level Outcome Projection (Memory Minimization)
+Steps can define an `outputs` block containing key-value mappings. When output projection is specified, Nestor evaluates the JSONata expressions against the step outcome, saves the projected fields, and releases the raw response body from the memory arena immediately.
+```json
+{
+  "id": "fetch_data",
+  "uses": "test_dynamic_plugin",
+  "outputs": {
+    "projected_status": "outputs.status",
+    "val": "outputs.computed_val"
+  }
+}
+```
+
+### 4.4 Provider Steps (`provider`)
+Executes an operation exposed by a globally configured provider, dynamically routing arguments and configurations to Nestor's plugin runners.
+```json
+{
+  "id": "run_prov",
+  "provider": "my_provider.operation_name",
+  "args": {
+    "dummy_param": "abc"
+  }
+}
+```
+
 ---
 
-## 5. Fine-Grained Edge Dependencies
+## 5. Global Provider Configurations & Session Reuse
+
+Global provider configurations centralize settings (TCP/TLS session pools, database pools, credentials, and api keys) at the workflow level. 
+
+Resolved configurations are automatically injected into the execution context under the `providers.<provider_id>` key, making them accessible to step outcome projections, variables, or dynamic plugins via `host_api->get_variable`.
+
+```json
+{
+  "version": "2.0.0",
+  "name": "My Orchestration Scenario",
+  "on": { "manual": {} },
+  "providers": {
+    "postgres": {
+      "connection_string": "postgresql://user:pass@host:5432/db",
+      "max_connections": 5
+    }
+  },
+  "jobs": {
+    "sync": {
+      "type": "task",
+      "variables": [
+        {
+          "name": "db_conn",
+          "expression": "providers.postgres.connection_string",
+          "visibility": "public"
+        }
+      ],
+      "steps": [
+        {
+          "id": "insert_row",
+          "provider": "postgres.insert",
+          "args": {
+            "table": "users",
+            "record": { "id": 1, "name": "Alice" }
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+---
+
+## 6. Fine-Grained Edge Dependencies
 
 When a job declares dependencies using `"depends_on"`, it can specify conditions to refine exactly when the edge is considered satisfied:
 
@@ -276,23 +345,23 @@ When a job declares dependencies using `"depends_on"`, it can specify conditions
 
 ---
 
-## 6. Caching and Observability Features
+## 7. Caching and Observability Features
 
-### 6.1 SQLite-Backed Job Cache
+### 7.1 SQLite-Backed Job Cache
 Nestor automatically caches task outcomes (status codes, outputs, response bodies) in a SQLite DB file. It uses SHA-256 keys derived from the job type, specification parameters, inputs, and active environment.
 * **Cache Revalidation**: Supports HTTP revalidation. If a cached response has `ETag` or `Last-Modified` headers, subsequent runs automatically send `If-None-Match` or `If-Modified-Since` headers to the server. If the server returns `304 Not Modified`, Nestor restores the cached payload.
 * **Eviction Policies**: Employs TTL (Time-To-Live) verification and LRU (Least-Recently Used) eviction to automatically prune old entries.
 
-### 6.2 Observability & Redaction
+### 7.2 Observability & Redaction
 Employs a high-speed Aho-Corasick keyword matching trie to identify sensitive keys (e.g. `secrets` block) on the fly, redacting them (`***`) automatically in all stderr/stdout stream printouts and workspace outputs before writing files.
 
 ---
 
-## 7. Deterministic Graph Boundaries
+## 8. Deterministic Graph Boundaries
 
 Nestor enforces strict safety guarantees regarding workflow execution and concurrent process lifecycles through deterministic graph boundaries:
 
-### 7.1 Start Boundary (Single Entry Point)
+### 8.1 Start Boundary (Single Entry Point)
 A workflow must declare a single starting job:
 * **Implicit Start**: By default, if exactly one job has `dependency_count == 0` (no `depends_on`), the compiler infers it as the entry point. If multiple root jobs exist and none are marked `"start": true`, compilation fails.
 * **Explicit Start**: Setting `"start": true` on a job forces it to be the entry point. Only **one** job in a scenario may be marked as start. If multiple are marked, compilation fails.
@@ -305,7 +374,7 @@ A workflow must declare a single starting job:
 }
 ```
 
-### 7.2 End Boundary & Custom Return Expressions
+### 8.2 End Boundary & Custom Return Expressions
 A workflow can designate terminal exit jobs using `"end"` or `"return"` properties:
 * **`end`** (`boolean`): Designates the job as a terminal exit point. When it completes successfully, the scheduler halts execution immediately and returns the job's outcomes under the top-level `"outputs"` key in the final context.
 * **`return`** (`expression` / `object`): Designates the job as a terminal exit point and evaluates a custom JSONata expression or maps a nested JSON structure (resolving placeholders) to be bound to the top-level `"outputs"` key.
@@ -325,7 +394,7 @@ A workflow can designate terminal exit jobs using `"end"` or `"return"` properti
 }
 ```
 
-### 7.3 Join Dominance Concurrency Check
+### 8.3 Join Dominance Concurrency Check
 To prevent dangling concurrent branches or race conditions, any path traversing a `fork` job node **must** pass through a `join` job node before hitting any exit node (where `is_end == true` or a `return` expression is defined).
 If any concurrent branch of a `fork` reaches an exit job without a synchronizing `join`, compilation fails.
 
