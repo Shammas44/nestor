@@ -249,6 +249,7 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
 
   Jsonv_Value step_http;
   Jsonv_Value step_uses;
+  Jsonv_Value step_provider;
   if (jsonv_obj_get(step_val.as.p, "http", &step_http) && step_http.tag == JSONV_VAL_OBJ) {
     step->is_http = true;
     Jsonv_Value v_method;
@@ -302,6 +303,17 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
     if (jsonv_obj_get(step_val.as.p, "sandboxed", &v_sandboxed) && v_sandboxed.tag == JSONV_VAL_BOOLEAN) {
       step->plugin.sandboxed = v_sandboxed.as.boolean;
     }
+    Jsonv_Value v_timeout;
+    if (jsonv_obj_get(step_val.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
+      step->timeout.data = v_timeout.as.p;
+      step->timeout.length = jsonv_val_str_len(v_timeout);
+    }
+  } else if (jsonv_obj_get(step_val.as.p, "provider", &step_provider) && step_provider.tag == JSONV_VAL_STRING) {
+    step->is_http = false;
+    step->is_provider = true;
+    step->prov.provider.data = step_provider.as.p;
+    step->prov.provider.length = jsonv_val_str_len(step_provider);
+    jsonv_obj_get(step_val.as.p, "args", &step->prov.args);
     Jsonv_Value v_timeout;
     if (jsonv_obj_get(step_val.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
       step->timeout.data = v_timeout.as.p;
@@ -916,6 +928,44 @@ static int32_t validate_boundaries(Arena *arena, JobNode **job_nodes, int job_co
   /*#endregion*/
 }
 
+static int32_t compile_providers(Arena *arena, Jsonv_Value providers_val, ProviderConfigAST **out_head) {
+  /*#region*/
+  if (providers_val.tag != JSONV_VAL_OBJ) {
+    return ERR_MISSING_VAR;
+  }
+  Jsonv_Obj *obj = providers_val.as.p;
+  int len = jsonv_obj_length(obj);
+  ProviderConfigAST *head = NULL;
+  ProviderConfigAST *tail = NULL;
+  for (int i = 0; i < len; i++) {
+    const char *key = jsonv_obj_key_at(obj, i);
+    Jsonv_Value config_val = jsonv_obj_val_at(obj, i);
+    if (config_val.tag != JSONV_VAL_OBJ) {
+      return ERR_MISSING_VAR;
+    }
+
+    StringView name = { key, strlen(key) };
+
+    ProviderConfigAST *pc = na_alloc(arena, sizeof(ProviderConfigAST));
+    if (!pc) return ERR_OOM;
+    memset(pc, 0, sizeof(ProviderConfigAST));
+    pc->name = name;
+    pc->config_val = config_val;
+
+    if (!head) {
+      head = pc;
+    } else {
+      tail->next = pc;
+    }
+    tail = pc;
+  }
+
+  *out_head = head;
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
+
 int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
   /*#region*/
   if (!arena || !ast)
@@ -927,6 +977,15 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
   Jsonv_Value root_vars;
   if (jsonv_obj_get(root_val.as.p, "variables", &root_vars) && root_vars.tag == JSONV_VAL_ARRAY) {
     int32_t status = compile_variables(arena, root_vars, &ast->variables_head);
+    if (status != ERR_SUCCESS) {
+      return status;
+    }
+  }
+
+  // Extract workflow root providers
+  Jsonv_Value root_providers;
+  if (jsonv_obj_get(root_val.as.p, "providers", &root_providers) && root_providers.tag == JSONV_VAL_OBJ) {
+    int32_t status = compile_providers(arena, root_providers, &ast->providers_head);
     if (status != ERR_SUCCESS) {
       return status;
     }

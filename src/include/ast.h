@@ -55,6 +55,7 @@ struct StepNode {
   VariableAST *variables_head;
   VariableAST *outputs_head;
   bool is_http; // true for http, false for plugin/uses
+  bool is_provider;
   StringView timeout;
   int retry_attempts;
   StringView retry_backoff;
@@ -75,6 +76,11 @@ struct StepNode {
     Jsonv_Value with_args;
     bool sandboxed;
   } plugin;
+
+  struct {
+    StringView provider;
+    Jsonv_Value args;
+  } prov;
 
   StepNode *next;
 };
@@ -164,6 +170,13 @@ struct JobNode {
   } spec;
 };
 
+typedef struct ProviderConfigAST ProviderConfigAST;
+struct ProviderConfigAST {
+  StringView name;
+  Jsonv_Value config_val;
+  ProviderConfigAST *next;
+};
+
 typedef struct {
   const char *input_buffer;
   size_t input_len;
@@ -177,6 +190,7 @@ typedef struct {
   size_t env_count;
 
   VariableAST *variables_head;
+  ProviderConfigAST *providers_head;
 
   JobNode *jobs_head; // Topologically sorted JobNodes list
   size_t job_count;

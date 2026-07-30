@@ -75,7 +75,9 @@
                 "outputs": {
                   "type": "object",
                   "additionalProperties": { "type": "string" }
-                }
+                },
+                "provider": { "type": "string" },
+                "args": { "type": "object" }
               }
             }
           },

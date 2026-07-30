@@ -1588,6 +1588,59 @@ static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
         return status;
       }
       break;
+    } else if (step->is_provider) {
+      char *prov_str = sv_to_cstring(arena, step->prov.provider);
+      char *dot = strchr(prov_str, '.');
+      char *operation = "";
+      if (dot) {
+        *dot = '\0';
+        operation = dot + 1;
+      }
+      char *provider_name = prov_str;
+
+      ProviderConfigAST *pc = ast->providers_head;
+      while (pc) {
+        char *pc_name = sv_to_cstring(arena, pc->name);
+        if (strcmp(pc_name, provider_name) == 0) {
+          break;
+        }
+        pc = pc->next;
+      }
+      Jsonv_Value resolved_config = jsonv_val_undefined();
+      if (pc) {
+        resolved_config = resolve_json_value(arena, pc->config_val, jsonv_arena, *context_val);
+      } else {
+        resolved_config = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+      }
+
+      Jsonv_Value resolved_args = resolve_json_value(arena, step->prov.args, jsonv_arena, *context_val);
+
+      Jsonv_Obj *payload_obj = jsonv_obj_new(jsonv_arena, NULL);
+      char *k_op = allocate_jsonv_string(arena, "operation", 9);
+      char *k_config = allocate_jsonv_string(arena, "configuration", 13);
+      char *k_args = allocate_jsonv_string(arena, "args", 4);
+
+      jsonv_obj_set(jsonv_arena, payload_obj, k_op, jsonv_val_str(allocate_jsonv_string(arena, operation, strlen(operation))));
+      jsonv_obj_set(jsonv_arena, payload_obj, k_config, resolved_config);
+      jsonv_obj_set(jsonv_arena, payload_obj, k_args, resolved_args);
+
+      StepNode temp_step;
+      memset(&temp_step, 0, sizeof(StepNode));
+      temp_step.id = step->id;
+      temp_step.is_http = false;
+      temp_step.is_provider = false;
+      temp_step.outputs_head = step->outputs_head;
+      temp_step.plugin.uses.data = provider_name;
+      temp_step.plugin.uses.length = strlen(provider_name);
+      temp_step.plugin.with_args = jsonv_val_obj(payload_obj);
+      temp_step.plugin.sandboxed = false;
+
+      int32_t status = plugin_start(&aj->plugin_exec, effective_arena, jsonv_arena, ast, *context_val, &temp_step);
+      if (status != ERR_SUCCESS) {
+        aj->job->execution_state = STATE_FAILED;
+        return status;
+      }
+      break;
     } else {
       int32_t status = plugin_start(&aj->plugin_exec, effective_arena, jsonv_arena, ast, *context_val, step);
       if (status != ERR_SUCCESS) {
@@ -1938,6 +1991,19 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
       jsonv_obj_set(jsonv_arena, context_val->as.p, name_cstr, val);
     }
     rvar = rvar->next;
+  }
+
+  if (ast->providers_head) {
+    Jsonv_Obj *providers_obj = jsonv_obj_new(jsonv_arena, NULL);
+    ProviderConfigAST *pc = ast->providers_head;
+    while (pc) {
+      Jsonv_Value resolved_pc = resolve_json_value(arena, pc->config_val, jsonv_arena, *context_val);
+      char *pc_name = sv_to_cstring(arena, pc->name);
+      jsonv_obj_set(jsonv_arena, providers_obj, pc_name, resolved_pc);
+      pc = pc->next;
+    }
+    char *k_providers = allocate_jsonv_string(arena, "providers", 9);
+    jsonv_obj_set(jsonv_arena, context_val->as.p, k_providers, jsonv_val_obj(providers_obj));
   }
 
   Jsonv_Obj *jobs_root_obj = jsonv_obj_new(jsonv_arena, NULL);
