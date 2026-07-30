@@ -287,6 +287,23 @@ Steps can define a fallback outcome object to be returned if the step fails (e.g
 }
 ```
 
+### 4.6 Nested Sub-Workflows
+To foster reusability and modularity, steps can recursively invoke another workflow scenario.
+* **Syntax**: Set the `uses` property to the prefix `workflows.<sub_workflow_name>`.
+* **Resolution**: The engine automatically resolves this target to a file at `workflows/<sub_workflow_name>.yaml` (or `.yml`).
+* **Execution**: The step's `with` arguments are bound as the `inputs` of the sub-workflow.
+* **Return Value**: Upon completion, the sub-workflow's final evaluated `outputs` (returned by exit or return jobs) are captured and returned under the parent step's outcome `body` (accessible via `steps.<step_id>.body`).
+
+```json
+{
+  "id": "invoke_nested_flow",
+  "uses": "workflows.process_customer",
+  "with": {
+    "customer_id": "cust-123"
+  }
+}
+```
+
 ---
 
 ## 5. Global Provider Configurations & Session Reuse
