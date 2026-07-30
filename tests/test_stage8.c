@@ -882,7 +882,7 @@ TIMED_TEST(stage8, cache_hit_and_ttl_eviction, init, fini)
     "        {\n"
     "          \"id\": \"cache_step\",\n"
     "          \"http\": {\n"
-    "            \"method\": \"POST\",\n"
+    "            \"method\": \"GET\",\n"
     "            \"url\": \"http://127.0.0.1:8080/cache_url\"\n"
     "          }\n"
     "        }\n"
@@ -908,8 +908,8 @@ TIMED_TEST(stage8, cache_hit_and_ttl_eviction, init, fini)
 
   // First execution: cache miss, mock transport returns result
   transport_mock_clear();
-  transport_mock_add_response("http://127.0.0.1:8080/cache_url", "POST", 200, "{\"val\": 42}");
-  transport_mock_add_header("http://127.0.0.1:8080/cache_url", "POST", "Cache-Control", "max-age=3600");
+  transport_mock_add_response("http://127.0.0.1:8080/cache_url", "GET", 200, "{\"val\": 42}");
+  transport_mock_add_header("http://127.0.0.1:8080/cache_url", "GET", "Cache-Control", "max-age=3600");
 
   Transport *mock_trans = transport_mock_new(arena);
   int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
@@ -992,7 +992,7 @@ TIMED_TEST(stage8, cache_304_validation, init, fini)
     "        {\n"
     "          \"id\": \"cache_step\",\n"
     "          \"http\": {\n"
-    "            \"method\": \"POST\",\n"
+    "            \"method\": \"GET\",\n"
     "            \"url\": \"http://127.0.0.1:8080/cache_url\"\n"
     "          }\n"
     "        }\n"
@@ -1018,9 +1018,9 @@ TIMED_TEST(stage8, cache_304_validation, init, fini)
 
   // First execution: Cache-Control: no-cache, ETag: "tag-123"
   transport_mock_clear();
-  transport_mock_add_response("http://127.0.0.1:8080/cache_url", "POST", 200, "{\"val\": 100}");
-  transport_mock_add_header("http://127.0.0.1:8080/cache_url", "POST", "Cache-Control", "no-cache");
-  transport_mock_add_header("http://127.0.0.1:8080/cache_url", "POST", "ETag", "tag-123");
+  transport_mock_add_response("http://127.0.0.1:8080/cache_url", "GET", 200, "{\"val\": 100}");
+  transport_mock_add_header("http://127.0.0.1:8080/cache_url", "GET", "Cache-Control", "no-cache");
+  transport_mock_add_header("http://127.0.0.1:8080/cache_url", "GET", "ETag", "tag-123");
 
   Transport *mock_trans = transport_mock_new(arena);
   int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
@@ -1037,7 +1037,7 @@ TIMED_TEST(stage8, cache_304_validation, init, fini)
 
   // Second execution: stale entry, validate with ETag, server returns 304
   transport_mock_clear();
-  transport_mock_add_response("http://127.0.0.1:8080/cache_url", "POST", 304, "");
+  transport_mock_add_response("http://127.0.0.1:8080/cache_url", "GET", 304, "");
 
   Transport *mock_trans2 = transport_mock_new(arena);
   run_status = run_workflow_opt(arena, &ast, &context_val2, mock_trans2);

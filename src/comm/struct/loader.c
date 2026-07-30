@@ -1,10 +1,44 @@
 #include "loader.h"
 #include "parser.h"
+#include <jsonv/ctx.h>
+#include <jsonv/shape.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
+static void *loader_jsonv_alloc(void *user_data, size_t size) {
+  /*#region*/
+  return na_alloc((Arena *)user_data, size);
+  /*#endregion*/
+}
+
+static void loader_jsonv_reset(void *user_data) {
+  /*#region*/
+  (void)user_data;
+  /*#endregion*/
+}
+
+static void loader_jsonv_reset_to(void *user_data, size_t keep_size) {
+  /*#region*/
+  (void)user_data;
+  (void)keep_size;
+  /*#endregion*/
+}
+
+static void loader_jsonv_destroy(void *user_data) {
+  /*#region*/
+  (void)user_data;
+  /*#endregion*/
+}
+
+static const Jsonv_Arena_Ops loader_jsonv_ops = {
+  .alloc = loader_jsonv_alloc,
+  .reset = loader_jsonv_reset,
+  .reset_to = loader_jsonv_reset_to,
+  .destroy = loader_jsonv_destroy
+};
 
 static char *read_file_content(Arena *arena, const char *filepath, size_t *out_len) {
   /*#region*/
@@ -176,6 +210,52 @@ static int32_t load_file_into_workspace(Arena *arena, const char *filepath, Work
   char *content = read_file_content(arena, filepath, &content_len);
   if (!content || content_len == 0) return ERR_SUCCESS;
 
+  // Check if provider contract YAML (key 'provider:') first to avoid spurious validation errors
+  char *provider_kw = strstr(content, "provider:");
+  if (provider_kw) {
+    ProviderDef *pdef = (ProviderDef *)na_alloc(arena, sizeof(ProviderDef));
+    if (!pdef) return ERR_OOM;
+    memset(pdef, 0, sizeof(ProviderDef));
+
+    Jsonv_Arena *jarena = jsonv_arena_new_custom(&loader_jsonv_ops, arena);
+    Jsonv_Context *ctx = jsonv_ctx_new(jarena, NULL, NULL);
+    if (ctx && jsonv_ctx_parse_yaml_data(ctx, (const unsigned char *)content)) {
+      Jsonv_Value root;
+      jsonv_ctx_get_value(ctx, &root);
+      if (root.tag == JSONV_VAL_OBJ) {
+        Jsonv_Value name_val;
+        if (jsonv_obj_get(root.as.p, "provider", &name_val) && name_val.tag == JSONV_VAL_STRING) {
+          pdef->name.data = name_val.as.p;
+          pdef->name.length = jsonv_val_str_len(name_val);
+        }
+        Jsonv_Value desc_val;
+        if (jsonv_obj_get(root.as.p, "description", &desc_val) && desc_val.tag == JSONV_VAL_STRING) {
+          pdef->description.data = desc_val.as.p;
+          pdef->description.length = jsonv_val_str_len(desc_val);
+        }
+        Jsonv_Value ops_val;
+        if (jsonv_obj_get(root.as.p, "operations", &ops_val) && ops_val.tag == JSONV_VAL_OBJ) {
+          pdef->operations = ops_val;
+        } else {
+          pdef->operations = jsonv_val_obj(jsonv_obj_new(jarena, NULL));
+        }
+      }
+    }
+
+    if (pdef->name.length == 0) {
+      char *name_start = provider_kw + 9;
+      while (*name_start == ' ' || *name_start == '\t') name_start++;
+      char *name_end = name_start;
+      while (*name_end && *name_end != '\r' && *name_end != '\n') name_end++;
+      pdef->name = (StringView){ name_start, (size_t)(name_end - name_start) };
+    }
+
+    pdef->next = map->providers_head;
+    map->providers_head = pdef;
+    map->provider_count++;
+    return ERR_SUCCESS;
+  }
+
   // Attempt parsing as Workflow
   WorkflowDef *wf = (WorkflowDef *)na_alloc(arena, sizeof(WorkflowDef));
   if (!wf) return ERR_OOM;
@@ -190,25 +270,6 @@ static int32_t load_file_into_workspace(Arena *arena, const char *filepath, Work
     map->workflows_head = wf;
     map->workflow_count++;
     if (!map->root_workflow) map->root_workflow = wf;
-    return ERR_SUCCESS;
-  }
-
-  // Check if provider contract YAML (key 'provider:')
-  char *provider_kw = strstr(content, "provider:");
-  if (provider_kw) {
-    ProviderDef *pdef = (ProviderDef *)na_alloc(arena, sizeof(ProviderDef));
-    if (!pdef) return ERR_OOM;
-    memset(pdef, 0, sizeof(ProviderDef));
-
-    char *name_start = provider_kw + 9;
-    while (*name_start == ' ' || *name_start == '\t') name_start++;
-    char *name_end = name_start;
-    while (*name_end && *name_end != '\r' && *name_end != '\n') name_end++;
-
-    pdef->name = (StringView){ name_start, (size_t)(name_end - name_start) };
-    pdef->next = map->providers_head;
-    map->providers_head = pdef;
-    map->provider_count++;
     return ERR_SUCCESS;
   }
 

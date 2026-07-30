@@ -404,6 +404,237 @@ Test(ir_stage15_5, step_level_fallbacks) {
   arena_destroy(arena);
 }
 
+Test(ir_stage15_5, state_locking_and_resuming) {
+  unlink(".state_wf.tfstate");
+  unlink(".state_wf.tfstate.lock");
+
+  Arena *arena = arena_create(256 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+      "version: 2.0.0\n"
+      "name: state_wf\n"
+      "on: { manual: {} }\n"
+      "jobs:\n"
+      "  job1:\n"
+      "    type: task\n"
+      "    steps:\n"
+      "      - id: step_one\n"
+      "        uses: \"test_dynamic_plugin\"\n"
+      "        with:\n"
+      "          param_in: \"first_value\"\n"
+      "  job2:\n"
+      "    type: wait_signal\n"
+      "    depends_on:\n"
+      "      - job: job1\n"
+      "    spec:\n"
+      "      correlation_id: \"inputs.my_corr\"\n"
+      "  job3:\n"
+      "    type: task\n"
+      "    depends_on:\n"
+      "      - job: job2\n"
+      "    steps:\n"
+      "      - id: step_two\n"
+      "        uses: \"test_dynamic_plugin\"\n"
+      "        with:\n"
+      "          param_in: \"second_value\"\n";
+
+  WorkflowAST ast;
+  int32_t parse_res = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_res, ERR_SUCCESS);
+
+  int32_t compile_res = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_res, ERR_SUCCESS);
+
+  // FIRST RUN: wrong correlation ID (should suspend)
+  Jsonv_Arena *jarena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj1 = jsonv_obj_new(jarena, NULL);
+  Jsonv_Obj *inputs_obj1 = jsonv_obj_new(jarena, NULL);
+  // Set inputs.param_in (needed by dynamic plugin)
+  jsonv_obj_set(jarena, inputs_obj1, "param_in", jsonv_val_str("test_input"));
+  jsonv_obj_set(jarena, inputs_obj1, "my_corr", jsonv_val_str("expected_id"));
+  jsonv_obj_set(jarena, inputs_obj1, "correlation_id", jsonv_val_str("wrong_id"));
+  jsonv_obj_set(jarena, root_obj1, "inputs", jsonv_val_obj(inputs_obj1));
+  Jsonv_Value context_val1 = jsonv_val_obj(root_obj1);
+
+  int32_t run_res1 = run_workflow(arena, &ast, &context_val1);
+  cr_assert_eq(run_res1, ERR_SUCCESS, "run_workflow 1 failed with code %d", run_res1);
+
+  // Assert that state file exists
+  cr_assert(access(".state_wf.tfstate", F_OK) == 0, ".state_wf.tfstate was not written");
+  cr_assert(access(".state_wf.tfstate.lock", F_OK) != 0, ".state_wf.tfstate.lock was not cleaned up");
+
+  // LOCK TEST: manual lock acquisition should block second run
+  FILE *lock_file = fopen(".state_wf.tfstate.lock", "w");
+  cr_assert_not_null(lock_file);
+  fprintf(lock_file, "9999");
+  fclose(lock_file);
+
+  Jsonv_Obj *root_obj2 = jsonv_obj_new(jarena, NULL);
+  Jsonv_Obj *inputs_obj2 = jsonv_obj_new(jarena, NULL);
+  jsonv_obj_set(jarena, inputs_obj2, "param_in", jsonv_val_str("test_input"));
+  jsonv_obj_set(jarena, inputs_obj2, "my_corr", jsonv_val_str("expected_id"));
+  jsonv_obj_set(jarena, inputs_obj2, "correlation_id", jsonv_val_str("expected_id"));
+  jsonv_obj_set(jarena, root_obj2, "inputs", jsonv_val_obj(inputs_obj2));
+  Jsonv_Value context_val2 = jsonv_val_obj(root_obj2);
+
+  int32_t run_res2 = run_workflow(arena, &ast, &context_val2);
+  cr_assert_eq(run_res2, ERR_LOCKED, "run_workflow should have failed with ERR_LOCKED, got %d", run_res2);
+
+  // Release lock
+  unlink(".state_wf.tfstate.lock");
+
+  // SECOND RUN (RESUME): correct correlation ID
+  int32_t run_res3 = run_workflow(arena, &ast, &context_val2);
+  cr_assert_eq(run_res3, ERR_SUCCESS, "run_workflow 3 failed with code %d", run_res3);
+
+  // Assert tfstate was deleted on completion
+  cr_assert(access(".state_wf.tfstate", F_OK) != 0, ".state_wf.tfstate was not cleaned up");
+
+  // Verify that both job1 and job3 executed and their steps outcomes exist in the final context
+  Jsonv_Value jobs_obj;
+  cr_assert(jsonv_obj_get(root_obj2, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value job1_obj, job3_obj;
+  cr_assert(jsonv_obj_get(jobs_obj.as.p, "job1", &job1_obj) && job1_obj.tag == JSONV_VAL_OBJ);
+  cr_assert(jsonv_obj_get(jobs_obj.as.p, "job3", &job3_obj) && job3_obj.tag == JSONV_VAL_OBJ);
+
+  arena_destroy(arena);
+}
+
+Test(ir_stage16, data_sources_vs_resources) {
+  Arena *arena = arena_create(256 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+      "version: \"2.0.0\"\n"
+      "name: cache_split_wf\n"
+      "on: { manual: {} }\n"
+      "jobs:\n"
+      "  read_job:\n"
+      "    type: task\n"
+      "    steps:\n"
+      "      - id: get_step\n"
+      "        http:\n"
+      "          method: GET\n"
+      "          url: \"https://httpbin.org/get\"\n"
+      "  write_job:\n"
+      "    type: task\n"
+      "    depends_on:\n"
+      "      - job: read_job\n"
+      "    steps:\n"
+      "      - id: post_step\n"
+      "        http:\n"
+      "          method: POST\n"
+      "          url: \"https://httpbin.org/post\"\n";
+
+  WorkflowAST ast;
+  int32_t parse_res = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_res, ERR_SUCCESS);
+
+  int32_t compile_res = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_res, ERR_SUCCESS, "compile failed with %d", compile_res);
+
+  JobNode *j = ast.jobs_head;
+  bool found_read = false;
+  bool found_write = false;
+  while (j) {
+    if (sv_equals_cstr(j->id, "read_job")) {
+      found_read = true;
+      cr_assert(j->spec.task.steps_head != NULL);
+      cr_assert_eq(j->spec.task.steps_head->is_resource, false, "GET step should not be classified as a resource");
+    } else if (sv_equals_cstr(j->id, "write_job")) {
+      found_write = true;
+      cr_assert(j->spec.task.steps_head != NULL);
+      cr_assert_eq(j->spec.task.steps_head->is_resource, true, "POST step should be classified as a resource");
+    }
+    j = j->next_sorted;
+  }
+  cr_assert(found_read && found_write);
+
+  arena_destroy(arena);
+}
+
+Test(ir_stage16_5, declarative_yaml_providers) {
+  // Create providers directory and the test declarative provider yaml file
+  system("mkdir -p ./providers");
+  FILE *f = fopen("./providers/test_dec.yaml", "w");
+  cr_assert_not_null(f);
+  const char *prov_yaml =
+      "provider: test_dec\n"
+      "description: Declarative test helper\n"
+      "operations:\n"
+      "  run_test:\n"
+      "    uses: test_dynamic_plugin.so\n";
+  fputs(prov_yaml, f);
+  fclose(f);
+
+  Arena *arena = arena_create(256 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+      "version: \"2.0.0\"\n"
+      "name: dec_wf\n"
+      "on: { manual: {} }\n"
+      "providers:\n"
+      "  test_dec: {}\n"
+      "jobs:\n"
+      "  job1:\n"
+      "    type: task\n"
+      "    steps:\n"
+      "      - id: step_one\n"
+      "        provider: test_dec.run_test\n";
+
+  WorkflowAST ast;
+  int32_t parse_res = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_res, ERR_SUCCESS);
+
+  int32_t compile_res = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_res, ERR_SUCCESS, "compile failed with %d", compile_res);
+
+  Jsonv_Arena *jarena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jarena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jarena, NULL);
+  jsonv_obj_set(jarena, inputs_obj, "param_in", jsonv_val_str("hello_declarative"));
+  jsonv_obj_set(jarena, root_obj, "inputs", jsonv_val_obj(inputs_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  int32_t run_res = run_workflow(arena, &ast, &context_val);
+  cr_assert_eq(run_res, ERR_SUCCESS, "run_workflow failed with code %d", run_res);
+
+  // Assert step outcome set by test_dynamic_plugin
+  Jsonv_Value jobs_obj;
+  cr_assert(jsonv_obj_get(root_obj, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value job1_obj;
+  cr_assert(jsonv_obj_get(jobs_obj.as.p, "job1", &job1_obj) && job1_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value steps_obj;
+  cr_assert(jsonv_obj_get(job1_obj.as.p, "steps", &steps_obj) && steps_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value step_one_obj;
+  cr_assert(jsonv_obj_get(steps_obj.as.p, "step_one", &step_one_obj) && step_one_obj.tag == JSONV_VAL_OBJ);
+
+
+  Jsonv_Value outputs_val;
+  cr_assert(jsonv_obj_get(step_one_obj.as.p, "outputs", &outputs_val) && outputs_val.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value status_val;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "status", &status_val) && status_val.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq(status_val.as.p, "success");
+
+  Jsonv_Value computed_val;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "computed_val", &computed_val) && computed_val.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq(computed_val.as.p, "Processed: hello_declarative");
+
+  arena_destroy(arena);
+
+  // Cleanup files
+  unlink("./providers/test_dec.yaml");
+  rmdir("./providers");
+}
+
+
 
 
 

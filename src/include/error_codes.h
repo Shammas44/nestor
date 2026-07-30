@@ -9,5 +9,6 @@
 #define ERR_LOOP_MAX_ITERATIONS -5
 #define ERR_HTTP_TRANSPORT -6
 #define ERR_INVALID_BOUNDARY -7
+#define ERR_LOCKED -8
 
 #endif

@@ -130,12 +130,15 @@ int32_t plugin_start(PluginExecutor *pe, Arena *arena, Jsonv_Arena *jsonv_arena,
       char path_with_ext[540];
       snprintf(path_with_ext, sizeof(path_with_ext), "%s.so", plugin_path);
       lib_handle = dlopen(path_with_ext, RTLD_NOW | RTLD_LOCAL);
-      if (!lib_handle) {
-        snprintf(path_with_ext, sizeof(path_with_ext), "%s.dylib", plugin_path);
-        lib_handle = dlopen(path_with_ext, RTLD_NOW | RTLD_LOCAL);
-      }
+
       if (lib_handle) {
         strcpy(plugin_path, path_with_ext);
+      } else {
+        snprintf(path_with_ext, sizeof(path_with_ext), "%s.dylib", plugin_path);
+        lib_handle = dlopen(path_with_ext, RTLD_NOW | RTLD_LOCAL);
+        if (lib_handle) {
+          strcpy(plugin_path, path_with_ext);
+        }
       }
     }
 

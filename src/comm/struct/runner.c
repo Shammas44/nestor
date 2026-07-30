@@ -1,4 +1,5 @@
 #include "runner.h"
+#include "loader.h"
 #include "evaluator.h"
 #include <jsonata/jsonata.h>
 #include "aho_corasick.h"
@@ -1582,6 +1583,36 @@ static int32_t complete_plugin_step_async(Arena *arena, Jsonv_Arena *jsonv_arena
   /*#endregion*/
 }
 
+static int32_t build_outputs_ast(Arena *arena, Jsonv_Value v_outputs, VariableAST **out_head) {
+  /*#region*/
+  if (v_outputs.tag != JSONV_VAL_OBJ) return ERR_SUCCESS;
+  int len = jsonv_obj_length(v_outputs.as.p);
+  VariableAST *tail = NULL;
+  for (int i = 0; i < len; i++) {
+    const char *key = jsonv_obj_key_at(v_outputs.as.p, i);
+    Jsonv_Value expr_val = jsonv_obj_val_at(v_outputs.as.p, i);
+    if (expr_val.tag != JSONV_VAL_STRING) continue;
+
+    VariableAST *var = na_alloc(arena, sizeof(VariableAST));
+    if (!var) return ERR_OOM;
+    memset(var, 0, sizeof(VariableAST));
+
+    var->name.data = key;
+    var->name.length = strlen(key);
+    var->expression.data = expr_val.as.p;
+    var->expression.length = jsonv_val_str_len(expr_val);
+
+    if (!*out_head) {
+      *out_head = var;
+    } else {
+      tail->next = var;
+    }
+    tail = var;
+  }
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
 static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, ActiveJob *aj, Transport *transport) {
   /*#region*/
   // Advance steps within an active job; executes non-blocking tasks inline.
@@ -1622,6 +1653,133 @@ static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
         operation = dot + 1;
       }
       char *provider_name = prov_str;
+
+      ProviderDef *pdef = NULL;
+      if (ast->providers_map) {
+        WorkspaceMap *map = (WorkspaceMap *)ast->providers_map;
+        pdef = workspace_find_provider(map, (StringView){provider_name, strlen(provider_name)});
+      }
+
+
+      if (pdef && pdef->operations.tag == JSONV_VAL_OBJ) {
+        Jsonv_Value op_val;
+        if (jsonv_obj_get(pdef->operations.as.p, operation, &op_val) && op_val.tag == JSONV_VAL_OBJ) {
+          ProviderConfigAST *pc = ast->providers_head;
+          while (pc) {
+            char *pc_name = sv_to_cstring(arena, pc->name);
+            if (strcmp(pc_name, provider_name) == 0) {
+              break;
+            }
+            pc = pc->next;
+          }
+          Jsonv_Value resolved_config = jsonv_val_undefined();
+          if (pc) {
+            resolved_config = resolve_json_value(arena, pc->config_val, jsonv_arena, *context_val);
+          } else {
+            resolved_config = jsonv_val_obj(jsonv_obj_new(jsonv_arena, NULL));
+          }
+
+          Jsonv_Value resolved_args = resolve_json_value(arena, step->prov.args, jsonv_arena, *context_val);
+
+          Jsonv_Obj *sub_root = jsonv_obj_new(jsonv_arena, NULL);
+          jsonv_obj_set(jsonv_arena, sub_root, "inputs", resolved_args);
+
+          Jsonv_Value sec_val;
+          if (jsonv_obj_get(context_val->as.p, "secrets", &sec_val)) {
+            jsonv_obj_set(jsonv_arena, sub_root, "secrets", sec_val);
+          }
+          Jsonv_Value env_val;
+          if (jsonv_obj_get(context_val->as.p, "env", &env_val)) {
+            jsonv_obj_set(jsonv_arena, sub_root, "env", env_val);
+          }
+          Jsonv_Value sub_ctx = jsonv_val_obj(sub_root);
+
+          Jsonv_Value v_uses;
+          if (jsonv_obj_get(op_val.as.p, "uses", &v_uses) && v_uses.tag == JSONV_VAL_STRING) {
+            Jsonv_Value op_args_val = jsonv_val_undefined();
+            jsonv_obj_get(op_val.as.p, "args", &op_args_val);
+
+            Jsonv_Value resolved_op_args = resolve_json_value(arena, op_args_val, jsonv_arena, sub_ctx);
+
+            StepNode temp_step;
+            memset(&temp_step, 0, sizeof(StepNode));
+            temp_step.id = step->id;
+
+            Jsonv_Value v_outputs;
+            if (jsonv_obj_get(op_val.as.p, "outputs", &v_outputs) && v_outputs.tag == JSONV_VAL_OBJ) {
+              build_outputs_ast(arena, v_outputs, &temp_step.outputs_head);
+            }
+
+            char *uses_str = sv_to_cstring(arena, (StringView){v_uses.as.p, jsonv_val_str_len(v_uses)});
+            if (strcmp(uses_str, "http") == 0) {
+              temp_step.is_http = true;
+
+              Jsonv_Value v_method = jsonv_val_undefined();
+              Jsonv_Value v_url = jsonv_val_undefined();
+              Jsonv_Value v_headers = jsonv_val_undefined();
+              Jsonv_Value v_body = jsonv_val_undefined();
+              if (resolved_op_args.tag == JSONV_VAL_OBJ) {
+                jsonv_obj_get(resolved_op_args.as.p, "method", &v_method);
+                jsonv_obj_get(resolved_op_args.as.p, "url", &v_url);
+                jsonv_obj_get(resolved_op_args.as.p, "headers", &v_headers);
+                jsonv_obj_get(resolved_op_args.as.p, "body", &v_body);
+              }
+
+              if (v_method.tag == JSONV_VAL_STRING) {
+                temp_step.http.method.data = v_method.as.p;
+                temp_step.http.method.length = jsonv_val_str_len(v_method);
+              } else {
+                temp_step.http.method = (StringView){"GET", 3};
+              }
+
+              if (v_url.tag == JSONV_VAL_STRING) {
+                temp_step.http.url.data = v_url.as.p;
+                temp_step.http.url.length = jsonv_val_str_len(v_url);
+              }
+              temp_step.http.headers = v_headers;
+              temp_step.http.body = v_body;
+
+              int32_t status = transport->ops->start_request(transport, effective_arena, jsonv_arena, *context_val, &temp_step, &aj->resp_buf, &aj->easy_handle);
+              if (status != ERR_SUCCESS) {
+                aj->job->execution_state = STATE_FAILED;
+                return status;
+              }
+              break;
+            } else {
+              char *dot_pl = strchr(uses_str, '.');
+              char *pl_operation = "";
+              if (dot_pl && strcmp(dot_pl, ".so") != 0 && strcmp(dot_pl, ".dylib") != 0 && strcmp(dot_pl, ".dll") != 0 && strcmp(dot_pl, ".js") != 0) {
+                *dot_pl = '\0';
+                pl_operation = dot_pl + 1;
+              }
+              char *plugin_name = uses_str;
+
+              Jsonv_Obj *payload_obj = jsonv_obj_new(jsonv_arena, NULL);
+              char *k_op = allocate_jsonv_string(arena, "operation", 9);
+              char *k_config = allocate_jsonv_string(arena, "configuration", 13);
+              char *k_args = allocate_jsonv_string(arena, "args", 4);
+
+              jsonv_obj_set(jsonv_arena, payload_obj, k_op, jsonv_val_str(allocate_jsonv_string(arena, pl_operation, strlen(pl_operation))));
+              jsonv_obj_set(jsonv_arena, payload_obj, k_config, resolved_config);
+              jsonv_obj_set(jsonv_arena, payload_obj, k_args, resolved_op_args);
+
+              temp_step.is_http = false;
+              temp_step.is_provider = false;
+              temp_step.plugin.uses.data = plugin_name;
+              temp_step.plugin.uses.length = strlen(plugin_name);
+              temp_step.plugin.with_args = jsonv_val_obj(payload_obj);
+              temp_step.plugin.sandboxed = false;
+
+              int32_t status = plugin_start(&aj->plugin_exec, effective_arena, jsonv_arena, ast, *context_val, &temp_step);
+              if (status != ERR_SUCCESS) {
+                aj->job->execution_state = STATE_FAILED;
+                return status;
+              }
+              break;
+            }
+          }
+        }
+      }
 
       ProviderConfigAST *pc = ast->providers_head;
       while (pc) {
@@ -1779,8 +1937,30 @@ static void generate_job_cache_key(Arena *arena, WorkflowAST *ast, Jsonv_Value c
   /*#endregion*/
 }
 
+static bool job_has_resource(JobNode *job) {
+  /*#region*/
+  if (job->type == NODE_TASK) {
+    StepNode *step = job->spec.task.steps_head;
+    while (step) {
+      if (step->is_resource) return true;
+      step = step->next;
+    }
+  } else if (job->type == NODE_WAIT_SIGNAL) {
+    StepNode *step = job->spec.wait_signal.steps_head;
+    while (step) {
+      if (step->is_resource) return true;
+      step = step->next;
+    }
+  }
+  return false;
+  /*#endregion*/
+}
+
 static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj) {
   /*#region*/
+  if (job_has_resource(job)) {
+    return;
+  }
   const char *no_cache_env = getenv("NESTOR_NO_CACHE");
   if (no_cache_env && (strcmp(no_cache_env, "true") == 0 || strcmp(no_cache_env, "1") == 0)) {
     return;
@@ -1888,6 +2068,9 @@ static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value conte
 
 static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, JobNode *job, ActiveJob *aj_out) {
   /*#region*/
+  if (job_has_resource(job)) {
+    return false;
+  }
   const char *no_cache_env = getenv("NESTOR_NO_CACHE");
   if (no_cache_env && (strcmp(no_cache_env, "true") == 0 || strcmp(no_cache_env, "1") == 0)) {
     return false;
@@ -1994,6 +2177,180 @@ static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
   /*#endregion*/
 }
 
+static bool jsonv_values_equal(Jsonv_Value a, Jsonv_Value b) {
+  /*#region*/
+  if (a.tag != b.tag) return false;
+  switch (a.tag) {
+    case JSONV_VAL_UNDEFINED:
+    case JSONV_VAL_NULL:
+      return true;
+    case JSONV_VAL_BOOLEAN:
+      return a.as.boolean == b.as.boolean;
+    case JSONV_VAL_INT:
+      return a.as.i == b.as.i;
+    case JSONV_VAL_DOUBLE:
+      return a.as.d == b.as.d;
+    case JSONV_VAL_STRING: {
+      size_t len_a = jsonv_val_str_len(a);
+      size_t len_b = jsonv_val_str_len(b);
+      if (len_a != len_b) return false;
+      return strncmp(a.as.p, b.as.p, len_a) == 0;
+    }
+    default:
+      return false;
+  }
+  /*#endregion*/
+}
+
+static void get_state_paths(WorkflowAST *ast, char *state_path, size_t state_len, char *lock_path, size_t lock_len) {
+  /*#region*/
+  char wf_name[256];
+  if (ast->name.length > 0 && ast->name.length < 250) {
+    memcpy(wf_name, ast->name.data, ast->name.length);
+    wf_name[ast->name.length] = '\0';
+  } else {
+    strcpy(wf_name, "default");
+  }
+  snprintf(state_path, state_len, ".%s.tfstate", wf_name);
+  snprintf(lock_path, lock_len, ".%s.tfstate.lock", wf_name);
+  /*#endregion*/
+}
+
+static int32_t acquire_state_lock(const char *lock_path) {
+  /*#region*/
+  if (access(lock_path, F_OK) == 0) {
+    return ERR_LOCKED;
+  }
+  FILE *f = fopen(lock_path, "w");
+  if (!f) return ERR_OOM;
+  fprintf(f, "%d", (int)getpid());
+  fclose(f);
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
+static void release_state_lock(const char *lock_path) {
+  /*#region*/
+  unlink(lock_path);
+  /*#endregion*/
+}
+
+static int32_t save_tfstate(Arena *arena, const char *state_path, Jsonv_Value context_val) {
+  /*#region*/
+  char *serialized = NULL;
+  int32_t rc = serialize_jsonv_value(arena, context_val, &serialized);
+  if (rc != ERR_SUCCESS) return rc;
+  FILE *f = fopen(state_path, "w");
+  if (!f) return ERR_OOM;
+  fputs(serialized, f);
+  fclose(f);
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
+static int32_t load_tfstate(Arena *arena, Jsonv_Arena *jsonv_arena, const char *state_path, Jsonv_Value *out_context) {
+  /*#region*/
+  FILE *f = fopen(state_path, "r");
+  if (!f) return ERR_MISSING_VAR;
+  fseek(f, 0, SEEK_END);
+  long len = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  char *buf = na_alloc(arena, len + 1);
+  if (!buf) {
+    fclose(f);
+    return ERR_OOM;
+  }
+  size_t n = fread(buf, 1, len, f);
+  buf[n] = '\0';
+  fclose(f);
+
+  Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+  if (!temp_ctx) return ERR_OOM;
+  if (!jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)buf)) {
+    return ERR_MISSING_VAR;
+  }
+  jsonv_ctx_get_value(temp_ctx, out_context);
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
+static void merge_tfstate_into_context(Jsonv_Arena *jsonv_arena, Jsonv_Value tfstate_val, Jsonv_Value context_val) {
+  /*#region*/
+  if (tfstate_val.tag != JSONV_VAL_OBJ || context_val.tag != JSONV_VAL_OBJ) return;
+
+  Jsonv_Value tf_jobs;
+  if (jsonv_obj_get(tfstate_val.as.p, "jobs", &tf_jobs) && tf_jobs.tag == JSONV_VAL_OBJ) {
+    Jsonv_Value ctx_jobs;
+    if (jsonv_obj_get(context_val.as.p, "jobs", &ctx_jobs) && ctx_jobs.tag == JSONV_VAL_OBJ) {
+      int len = jsonv_obj_length(tf_jobs.as.p);
+      for (int i = 0; i < len; i++) {
+        const char *key = jsonv_obj_key_at(tf_jobs.as.p, i);
+        Jsonv_Value val = jsonv_obj_val_at(tf_jobs.as.p, i);
+        jsonv_obj_set(jsonv_arena, ctx_jobs.as.p, key, val);
+      }
+    }
+  }
+
+  Jsonv_Value tf_provs;
+  if (jsonv_obj_get(tfstate_val.as.p, "providers", &tf_provs) && tf_provs.tag == JSONV_VAL_OBJ) {
+    Jsonv_Value ctx_provs;
+    if (jsonv_obj_get(context_val.as.p, "providers", &ctx_provs) && ctx_provs.tag == JSONV_VAL_OBJ) {
+      int len = jsonv_obj_length(tf_provs.as.p);
+      for (int i = 0; i < len; i++) {
+        const char *key = jsonv_obj_key_at(tf_provs.as.p, i);
+        Jsonv_Value val = jsonv_obj_val_at(tf_provs.as.p, i);
+        jsonv_obj_set(jsonv_arena, ctx_provs.as.p, key, val);
+      }
+    }
+  }
+  /*#endregion*/
+}
+
+static void resume_execution_state_from_context(WorkflowAST *ast, Jsonv_Value context_val) {
+  /*#region*/
+  JobNode *j_reset = ast->jobs_head;
+  while (j_reset) {
+    j_reset->execution_state = STATE_PENDING;
+    j_reset = j_reset->next_sorted;
+  }
+
+  if (context_val.tag != JSONV_VAL_OBJ) return;
+  Jsonv_Value jobs_val;
+  if (!jsonv_obj_get(context_val.as.p, "jobs", &jobs_val) || jobs_val.tag != JSONV_VAL_OBJ) {
+    return;
+  }
+  JobNode *job = ast->jobs_head;
+  while (job) {
+    Jsonv_Value entry;
+    bool found = false;
+    int len = jsonv_obj_length(jobs_val.as.p);
+    for (int i = 0; i < len; i++) {
+      const char *k = jsonv_obj_key_at(jobs_val.as.p, i);
+      if (strlen(k) == job->id.length && strncmp(k, job->id.data, job->id.length) == 0) {
+        entry = jsonv_obj_val_at(jobs_val.as.p, i);
+        found = true;
+        break;
+      }
+    }
+    if (found && entry.tag == JSONV_VAL_OBJ) {
+      Jsonv_Value status_val;
+      if (jsonv_obj_get(entry.as.p, "status", &status_val) && status_val.tag == JSONV_VAL_STRING) {
+        if (strcmp(status_val.as.p, "success") == 0) {
+          job->execution_state = STATE_SUCCEEDED;
+        } else if (strcmp(status_val.as.p, "failed") == 0) {
+          job->execution_state = STATE_FAILED;
+        } else if (strcmp(status_val.as.p, "skipped") == 0) {
+          job->execution_state = STATE_SKIPPED;
+        } else {
+          job->execution_state = STATE_PENDING;
+        }
+      }
+    }
+    job = job->next_sorted;
+  }
+  /*#endregion*/
+}
+
 int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_val, Transport *transport) {
   /*#region*/
   // Process the compiled graph concurrently using an event-driven scheduler.
@@ -2006,6 +2363,34 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
   set_global_ac_root(ac_root);
 
   Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast->jsonv_ctx);
+
+  if (!ast->providers_map) {
+    WorkspaceMap *map = na_alloc(arena, sizeof(WorkspaceMap));
+    if (map) {
+      memset(map, 0, sizeof(WorkspaceMap));
+      if (access("./providers", F_OK) == 0) {
+        workspace_load_directory(arena, "./providers", map);
+      }
+      ast->providers_map = map;
+
+    }
+  }
+
+  char state_path[270];
+  char lock_path[270];
+  get_state_paths(ast, state_path, sizeof(state_path), lock_path, sizeof(lock_path));
+
+  int32_t lock_rc = acquire_state_lock(lock_path);
+  if (lock_rc != ERR_SUCCESS) {
+    fprintf(stderr, "Error: Execution lock active. Another Nestor instance is running.\n");
+    return lock_rc;
+  }
+
+  Jsonv_Value tfstate_val = jsonv_val_undefined();
+  if (load_tfstate(arena, jsonv_arena, state_path, &tfstate_val) == ERR_SUCCESS) {
+    merge_tfstate_into_context(jsonv_arena, tfstate_val, *context_val);
+    resume_execution_state_from_context(ast, *context_val);
+  }
 
   VariableAST *rvar = ast->variables_head;
   while (rvar) {
@@ -2116,6 +2501,36 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
       JobNode *job = ast->jobs_head;
       while (job) {
         if (job->execution_state == STATE_PENDING && is_ready(job)) {
+          bool job_is_res = job_has_resource(job);
+          if (job_is_res) {
+            bool active_running = false;
+            ActiveJob *curr_aj = active_jobs_head;
+            while (curr_aj) {
+              if (curr_aj->job->execution_state == STATE_RUNNING) {
+                active_running = true;
+                break;
+              }
+              curr_aj = curr_aj->next;
+            }
+            if (active_running) {
+              job = job->next_sorted;
+              continue;
+            }
+          } else {
+            bool resource_running = false;
+            ActiveJob *curr_aj = active_jobs_head;
+            while (curr_aj) {
+              if (curr_aj->job->execution_state == STATE_RUNNING && job_has_resource(curr_aj->job)) {
+                resource_running = true;
+                break;
+              }
+              curr_aj = curr_aj->next;
+            }
+            if (resource_running) {
+              job = job->next_sorted;
+              continue;
+            }
+          }
           if (job->type == NODE_IF) {
             job->execution_state = STATE_RUNNING;
             Jsonv_Value eval_res = jsonv_val_undefined();
@@ -2172,6 +2587,120 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
           } else if (job->type == NODE_FORK) {
             job->execution_state = STATE_SUCCEEDED;
             control_flow_progress = true;
+            break;
+          } else if (job->type == NODE_WAIT_SIGNAL) {
+            Jsonv_Value resolved_corr = jsonv_val_undefined();
+            int32_t status = evaluate_expression(arena, job->spec.wait_signal.correlation_id, jsonv_arena, *context_val, &resolved_corr);
+            if (status != ERR_SUCCESS) {
+              job->execution_state = STATE_FAILED;
+              ret_val = status;
+              goto cleanup;
+            }
+
+            Jsonv_Value incoming_corr = jsonv_val_undefined();
+            bool incoming_matched = false;
+            Jsonv_Value inputs_val;
+            if (jsonv_obj_get(context_val->as.p, "inputs", &inputs_val) && inputs_val.tag == JSONV_VAL_OBJ) {
+              if (jsonv_obj_get(inputs_val.as.p, "correlation_id", &incoming_corr)) {
+                if (jsonv_values_equal(resolved_corr, incoming_corr)) {
+                  incoming_matched = true;
+                }
+              }
+            }
+
+            if (incoming_matched) {
+              if (job->spec.wait_signal.steps_head) {
+                ActiveJob *aj = na_alloc(arena, sizeof(ActiveJob));
+                if (!aj) {
+                  ret_val = ERR_OOM;
+                  goto cleanup;
+                }
+                memset(aj, 0, sizeof(ActiveJob));
+                aj->local_vars.tag = JSONV_VAL_OBJ;
+                aj->local_vars.as.p = jsonv_obj_new(jsonv_arena, NULL);
+                aj->job = job;
+
+                aj->steps_state_obj.tag = JSONV_VAL_OBJ;
+                aj->steps_state_obj.as.p = jsonv_obj_new(jsonv_arena, NULL);
+                char *k_steps = allocate_jsonv_string(arena, "steps", 5);
+                jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
+
+                char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+                Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+                jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, aj->steps_state_obj);
+                Jsonv_Value jobs_val_obj;
+                char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+                if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+                  jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+                }
+
+                StepNode *step = job->spec.wait_signal.steps_head;
+                Jsonv_Value jobs_obj;
+                if (jsonv_obj_get(context_val->as.p, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ) {
+                  Jsonv_Value job_entry;
+                  if (jsonv_obj_get(jobs_obj.as.p, job_id_cstr, &job_entry) && job_entry.tag == JSONV_VAL_OBJ) {
+                    Jsonv_Value steps_obj;
+                    if (jsonv_obj_get(job_entry.as.p, "steps", &steps_obj) && steps_obj.tag == JSONV_VAL_OBJ) {
+                      int slen = jsonv_obj_length(steps_obj.as.p);
+                      for (int s = 0; s < slen; s++) {
+                        const char *skey = jsonv_obj_key_at(steps_obj.as.p, s);
+                        Jsonv_Value sval = jsonv_obj_val_at(steps_obj.as.p, s);
+                        jsonv_obj_set(jsonv_arena, aj->steps_state_obj.as.p, skey, sval);
+                      }
+                      while (step) {
+                        char *step_id_cstr = sv_to_cstring(arena, step->id);
+                        Jsonv_Value dummy;
+                        if (!jsonv_obj_get(steps_obj.as.p, step_id_cstr, &dummy)) {
+                          break;
+                        }
+                        step = step->next;
+                      }
+                    }
+                  }
+                }
+
+                aj->curr_step = step;
+                aj->is_loop = false;
+
+                if (step == NULL) {
+                  job->execution_state = STATE_SUCCEEDED;
+                  char *k_status = allocate_jsonv_string(arena, "status", 6);
+                  jsonv_obj_set(jsonv_arena, job_outcome_obj, k_status, jsonv_val_str(allocate_jsonv_string(arena, "success", 7)));
+                  control_flow_progress = true;
+                } else {
+                  job->execution_state = STATE_RUNNING;
+                  aj->next = active_jobs_head;
+                  active_jobs_head = aj;
+                  push_local_vars(jsonv_arena, *context_val, aj->local_vars);
+                  evaluate_job_variables(arena, jsonv_arena, context_val, aj->job, aj->local_vars);
+                  int32_t status = advance_active_job(arena, jsonv_arena, ast, context_val, aj, transport);
+                  pop_local_vars(jsonv_arena, *context_val, aj->local_vars);
+                  if (status != ERR_SUCCESS) {
+                    ret_val = status;
+                    goto cleanup;
+                  }
+                }
+              } else {
+                char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+                Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+                char *k_status = allocate_jsonv_string(arena, "status", 6);
+                jsonv_obj_set(jsonv_arena, job_outcome_obj, k_status, jsonv_val_str(allocate_jsonv_string(arena, "success", 7)));
+                Jsonv_Value jobs_val_obj;
+                char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+                if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+                  jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+                }
+                job->execution_state = STATE_SUCCEEDED;
+                control_flow_progress = true;
+              }
+            } else {
+              job->execution_state = STATE_SUSPENDED;
+              fprintf(stderr, "Workflow suspended at wait_signal job '%.*s'.\n", (int)job->id.length, job->id.data);
+              save_tfstate(arena, state_path, *context_val);
+              control_flow_progress = false;
+              ret_val = ERR_SUCCESS;
+              break;
+            }
             break;
           } else if (job->type == NODE_TRANSFORM) {
             if (check_and_apply_cache(arena, jsonv_arena, ast, context_val, job, NULL)) {
@@ -2370,7 +2899,32 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
                jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
              }
 
-            aj->curr_step = job->spec.task.steps_head;
+            StepNode *step = job->spec.task.steps_head;
+            Jsonv_Value jobs_obj;
+            if (jsonv_obj_get(context_val->as.p, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ) {
+              Jsonv_Value job_entry;
+              char *job_id_cstr = sv_to_cstring(arena, job->id);
+              if (jsonv_obj_get(jobs_obj.as.p, job_id_cstr, &job_entry) && job_entry.tag == JSONV_VAL_OBJ) {
+                Jsonv_Value steps_obj;
+                if (jsonv_obj_get(job_entry.as.p, "steps", &steps_obj) && steps_obj.tag == JSONV_VAL_OBJ) {
+                  int slen = jsonv_obj_length(steps_obj.as.p);
+                  for (int s = 0; s < slen; s++) {
+                    const char *skey = jsonv_obj_key_at(steps_obj.as.p, s);
+                    Jsonv_Value sval = jsonv_obj_val_at(steps_obj.as.p, s);
+                    jsonv_obj_set(jsonv_arena, aj->steps_state_obj.as.p, skey, sval);
+                  }
+                  while (step) {
+                    char *step_id_cstr = sv_to_cstring(arena, step->id);
+                    Jsonv_Value dummy;
+                    if (!jsonv_obj_get(steps_obj.as.p, step_id_cstr, &dummy)) {
+                      break;
+                    }
+                    step = step->next;
+                  }
+                }
+              }
+            }
+            aj->curr_step = step;
             aj->is_loop = false;
           } else if (job->type == NODE_LOOP) {
             aj->is_loop = true;
@@ -2416,6 +2970,10 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
             aj->next = active_jobs_head;
             active_jobs_head = aj;
           }
+        } else if (job->type == NODE_IF || job->type == NODE_SWITCH || job->type == NODE_FORK ||
+                   job->type == NODE_JOIN || job->type == NODE_WAIT_SIGNAL || job->type == NODE_TRANSFORM) {
+          job = job->next_sorted;
+          continue;
         } else {
           job->execution_state = STATE_FAILED;
           ret_val = ERR_CLI_UNSUPPORTED_BLOCKING_NODE;
@@ -2671,6 +3229,23 @@ cleanup:
   if (ast->ipc_socket_path[0] != '\0') {
     unlink(ast->ipc_socket_path);
   }
+  bool has_suspended = false;
+  JobNode *js = ast->jobs_head;
+  while (js) {
+    if (js->execution_state == STATE_SUSPENDED) {
+      has_suspended = true;
+      break;
+    }
+    js = js->next_sorted;
+  }
+
+  if (ret_val == ERR_SUCCESS && !has_suspended) {
+    unlink(state_path);
+  } else {
+    save_tfstate(arena, state_path, *context_val);
+  }
+  release_state_lock(lock_path);
+
   return ret_val;
   /*#endregion*/
 }

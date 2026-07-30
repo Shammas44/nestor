@@ -231,6 +231,27 @@ static int32_t compile_step_outputs(Arena *arena, Jsonv_Value outputs_val, Varia
 }
 
 
+static bool is_operation_resource(StringView sv) {
+  /*#region*/
+  char buf[256];
+  if (sv.length >= sizeof(buf)) {
+    return true;
+  }
+  memcpy(buf, sv.data, sv.length);
+  buf[sv.length] = '\0';
+  for (size_t i = 0; i < sv.length; i++) {
+    if (buf[i] >= 'A' && buf[i] <= 'Z') {
+      buf[i] = buf[i] - 'A' + 'a';
+    }
+  }
+  if (strstr(buf, "query") || strstr(buf, "get") || strstr(buf, "read") ||
+      strstr(buf, "fetch") || strstr(buf, "select") || strstr(buf, "list")) {
+    return false;
+  }
+  return true;
+  /*#endregion*/
+}
+
 static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_step) {
   /*#region*/
   if (step_val.tag != JSONV_VAL_OBJ)
@@ -293,6 +314,11 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
         step->http.chunk_size = (int)v_chunk_size.as.d;
       }
     }
+    if (sv_equals_cstr(step->http.method, "GET") || sv_equals_cstr(step->http.method, "HEAD")) {
+      step->is_resource = false;
+    } else {
+      step->is_resource = true;
+    }
   } else if (jsonv_obj_get(step_val.as.p, "uses", &step_uses) && step_uses.tag == JSONV_VAL_STRING) {
     step->is_http = false;
     step->plugin.uses.data = step_uses.as.p;
@@ -308,6 +334,7 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
       step->timeout.data = v_timeout.as.p;
       step->timeout.length = jsonv_val_str_len(v_timeout);
     }
+    step->is_resource = is_operation_resource(step->plugin.uses);
   } else if (jsonv_obj_get(step_val.as.p, "provider", &step_provider) && step_provider.tag == JSONV_VAL_STRING) {
     step->is_http = false;
     step->is_provider = true;
@@ -319,6 +346,7 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
       step->timeout.data = v_timeout.as.p;
       step->timeout.length = jsonv_val_str_len(v_timeout);
     }
+    step->is_resource = is_operation_resource(step->prov.provider);
   } else {
     return ERR_MISSING_VAR;
   }
@@ -649,21 +677,27 @@ static int32_t compile_loop_spec(Arena *arena, JobNode *job, Jsonv_Value job_spe
 
 static int32_t compile_wait_signal_spec(Arena *arena, JobNode *job, Jsonv_Value job_spec_val) {
   /*#region*/
+  Jsonv_Value target_val = job_spec_val;
+  Jsonv_Value v_spec;
+  if (jsonv_obj_get(job_spec_val.as.p, "spec", &v_spec) && v_spec.tag == JSONV_VAL_OBJ) {
+    target_val = v_spec;
+  }
+
   Jsonv_Value v_corr;
-  if (!jsonv_obj_get(job_spec_val.as.p, "correlation_id", &v_corr) || v_corr.tag != JSONV_VAL_STRING) {
+  if (!jsonv_obj_get(target_val.as.p, "correlation_id", &v_corr) || v_corr.tag != JSONV_VAL_STRING) {
     return ERR_MISSING_VAR;
   }
   job->spec.wait_signal.correlation_id.data = v_corr.as.p;
   job->spec.wait_signal.correlation_id.length = jsonv_val_str_len(v_corr);
 
   Jsonv_Value v_timeout;
-  if (jsonv_obj_get(job_spec_val.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
+  if (jsonv_obj_get(target_val.as.p, "timeout", &v_timeout) && v_timeout.tag == JSONV_VAL_STRING) {
     job->spec.wait_signal.timeout.data = v_timeout.as.p;
     job->spec.wait_signal.timeout.length = jsonv_val_str_len(v_timeout);
   }
 
   Jsonv_Value v_steps;
-  if (jsonv_obj_get(job_spec_val.as.p, "steps", &v_steps) && v_steps.tag == JSONV_VAL_ARRAY) {
+  if (jsonv_obj_get(target_val.as.p, "steps", &v_steps) && v_steps.tag == JSONV_VAL_ARRAY) {
     int steps_len = jsonv_arr_length(v_steps.as.p);
     StepNode *prev_step = NULL;
     for (int s = 0; s < steps_len; s++) {
@@ -688,8 +722,14 @@ static int32_t compile_wait_signal_spec(Arena *arena, JobNode *job, Jsonv_Value 
 
 static int32_t compile_wait_timer_spec(JobNode *job, Jsonv_Value job_spec_val) {
   /*#region*/
+  Jsonv_Value target_val = job_spec_val;
+  Jsonv_Value v_spec;
+  if (jsonv_obj_get(job_spec_val.as.p, "spec", &v_spec) && v_spec.tag == JSONV_VAL_OBJ) {
+    target_val = v_spec;
+  }
+
   Jsonv_Value v_dur;
-  if (!jsonv_obj_get(job_spec_val.as.p, "duration", &v_dur) || v_dur.tag != JSONV_VAL_STRING) {
+  if (!jsonv_obj_get(target_val.as.p, "duration", &v_dur) || v_dur.tag != JSONV_VAL_STRING) {
     return ERR_MISSING_VAR;
   }
   job->spec.wait_timer.duration.data = v_dur.as.p;

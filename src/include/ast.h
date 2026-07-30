@@ -56,6 +56,7 @@ struct StepNode {
   VariableAST *outputs_head;
   bool is_http; // true for http, false for plugin/uses
   bool is_provider;
+  bool is_resource;
   StringView timeout;
   int retry_attempts;
   StringView retry_backoff;
@@ -198,6 +199,7 @@ typedef struct {
   JobNode *jobs_head; // Topologically sorted JobNodes list
   size_t job_count;
   int max_concurrency;
+  void *providers_map;
   char ipc_socket_path[256];
 } WorkflowAST;
 
