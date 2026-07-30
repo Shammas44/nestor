@@ -209,4 +209,78 @@ Test(ir_stage14, variables_execution) {
   arena_destroy(arena);
 }
 
+Test(ir_stage14_5, step_outcome_projection) {
+  Arena *arena = arena_create(256 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml =
+      "version: 2.0.0\n"
+      "name: projection_wf\n"
+      "on: { manual: {} }\n"
+      "jobs:\n"
+      "  job1:\n"
+      "    type: task\n"
+      "    steps:\n"
+      "      - id: run_plugin\n"
+      "        uses: \"test_dynamic_plugin.so\"\n"
+      "        outputs:\n"
+      "          projected_status: \"outputs.status\"\n"
+      "          val: \"outputs.computed_val\"\n";
+
+  WorkflowAST ast;
+  int32_t parse_res = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_res, ERR_SUCCESS);
+
+  int32_t compile_res = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_res, ERR_SUCCESS);
+
+  Jsonv_Arena *jarena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jarena, NULL);
+  
+  // Set inputs.param_in (needed by the plugin!)
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jarena, NULL);
+  jsonv_obj_set(jarena, inputs_obj, "param_in", jsonv_val_str("test_input"));
+  jsonv_obj_set(jarena, root_obj, "inputs", jsonv_val_obj(inputs_obj));
+  
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  int32_t run_res = run_workflow(arena, &ast, &context_val);
+  cr_assert_eq(run_res, ERR_SUCCESS, "run_workflow failed with code %d", run_res);
+
+  // Check the outputs in the serialized context_val
+  Jsonv_Value jobs_obj;
+  cr_assert(jsonv_obj_get(root_obj, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value job1_obj;
+  cr_assert(jsonv_obj_get(jobs_obj.as.p, "job1", &job1_obj) && job1_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value steps_obj;
+  cr_assert(jsonv_obj_get(job1_obj.as.p, "steps", &steps_obj) && steps_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value run_plugin_obj;
+  cr_assert(jsonv_obj_get(steps_obj.as.p, "run_plugin", &run_plugin_obj) && run_plugin_obj.tag == JSONV_VAL_OBJ);
+
+  // Check projected outputs
+  Jsonv_Value outputs_obj;
+  cr_assert(jsonv_obj_get(run_plugin_obj.as.p, "outputs", &outputs_obj) && outputs_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value status_val;
+  cr_assert(jsonv_obj_get(outputs_obj.as.p, "projected_status", &status_val) && status_val.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq((const char *)status_val.as.p, "success");
+
+  Jsonv_Value val_val;
+  cr_assert(jsonv_obj_get(outputs_obj.as.p, "val", &val_val) && val_val.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq((const char *)val_val.as.p, "Processed: test_input");
+
+  // Check that body and stderr are null (reclaimed / minimized!)
+  Jsonv_Value body_val;
+  cr_assert(jsonv_obj_get(run_plugin_obj.as.p, "body", &body_val) && body_val.tag == JSONV_VAL_NULL);
+
+  Jsonv_Value stderr_val;
+  cr_assert(jsonv_obj_get(run_plugin_obj.as.p, "stderr", &stderr_val) && stderr_val.tag == JSONV_VAL_NULL);
+
+  arena_destroy(arena);
+}
+
+
 

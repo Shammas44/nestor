@@ -71,7 +71,11 @@
                 "timeout": { "type": "string" },
                 "retry_attempts": { "type": "integer" },
                 "retry_backoff": { "type": "string" },
-                "retry_delay": { "type": "string" }
+                "retry_delay": { "type": "string" },
+                "outputs": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                }
               }
             }
           },

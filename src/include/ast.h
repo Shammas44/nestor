@@ -53,6 +53,7 @@ typedef struct StepNode StepNode;
 struct StepNode {
   StringView id;
   VariableAST *variables_head;
+  VariableAST *outputs_head;
   bool is_http; // true for http, false for plugin/uses
   StringView timeout;
   int retry_attempts;

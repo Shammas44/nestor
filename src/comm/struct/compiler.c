@@ -175,6 +175,62 @@ static int32_t compile_variables(Arena *arena, Jsonv_Value vars_val, VariableAST
 }
 
 
+static int32_t compile_step_outputs(Arena *arena, Jsonv_Value outputs_val, VariableAST **out_head) {
+  /*#region*/
+  if (outputs_val.tag != JSONV_VAL_OBJ) {
+    return ERR_MISSING_VAR;
+  }
+  Jsonv_Obj *obj = outputs_val.as.p;
+  int len = jsonv_obj_length(obj);
+  VariableAST *head = NULL;
+  VariableAST *tail = NULL;
+  for (int i = 0; i < len; i++) {
+    const char *key = jsonv_obj_key_at(obj, i);
+    Jsonv_Value expr_val = jsonv_obj_val_at(obj, i);
+    if (expr_val.tag != JSONV_VAL_STRING) {
+      return ERR_MISSING_VAR;
+    }
+
+    StringView name = { key, strlen(key) };
+    StringView expr = { expr_val.as.p, jsonv_val_str_len(expr_val) };
+
+    if (name.length == 0) return ERR_MISSING_VAR;
+    if (!((name.data[0] >= 'a' && name.data[0] <= 'z') ||
+          (name.data[0] >= 'A' && name.data[0] <= 'Z') ||
+          name.data[0] == '_')) {
+      return ERR_MISSING_VAR;
+    }
+    for (size_t j = 1; j < name.length; j++) {
+      char c = name.data[j];
+      if (!((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '_')) {
+        return ERR_MISSING_VAR;
+      }
+    }
+
+    VariableAST *var = na_alloc(arena, sizeof(VariableAST));
+    if (!var) return ERR_OOM;
+    memset(var, 0, sizeof(VariableAST));
+    var->name = name;
+    var->expression = expr;
+    var->visibility = VAR_PUBLIC;
+
+    if (!head) {
+      head = var;
+    } else {
+      tail->next = var;
+    }
+    tail = var;
+  }
+
+  *out_head = head;
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
+
 static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_step) {
   /*#region*/
   if (step_val.tag != JSONV_VAL_OBJ)
@@ -278,6 +334,13 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
   Jsonv_Value v_vars;
   if (jsonv_obj_get(step_val.as.p, "variables", &v_vars) && v_vars.tag == JSONV_VAL_ARRAY) {
     int32_t status = compile_variables(arena, v_vars, &step->variables_head);
+    if (status != ERR_SUCCESS) {
+      return status;
+    }
+  }
+  Jsonv_Value v_outputs;
+  if (jsonv_obj_get(step_val.as.p, "outputs", &v_outputs) && v_outputs.tag == JSONV_VAL_OBJ) {
+    int32_t status = compile_step_outputs(arena, v_outputs, &step->outputs_head);
     if (status != ERR_SUCCESS) {
       return status;
     }

@@ -28,6 +28,39 @@
 typedef struct ActiveJob ActiveJob;
 static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj);
 static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, JobNode *job, ActiveJob *aj_out);
+
+static void *my_jsonv_arena_alloc(void *user_data, size_t size) {
+  /*#region*/
+  return na_alloc((Arena *)user_data, size);
+  /*#endregion*/
+}
+
+static void my_jsonv_arena_reset(void *user_data) {
+  /*#region*/
+  (void)user_data;
+  /*#endregion*/
+}
+
+static void my_jsonv_arena_reset_to(void *user_data, size_t keep_size) {
+  /*#region*/
+  (void)user_data;
+  (void)keep_size;
+  /*#endregion*/
+}
+
+static void my_jsonv_arena_destroy(void *user_data) {
+  /*#region*/
+  (void)user_data;
+  /*#endregion*/
+}
+
+static const Jsonv_Arena_Ops my_jsonv_ops = {
+  .alloc = my_jsonv_arena_alloc,
+  .reset = my_jsonv_arena_reset,
+  .reset_to = my_jsonv_arena_reset_to,
+  .destroy = my_jsonv_arena_destroy
+};
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1135,6 +1168,60 @@ static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Json
 
 static void save_step_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob *aj, StepNode *step, Jsonv_Obj *outcome_obj) {
   /*#region*/
+  if (step->outputs_head) {
+    Arena *temp_arena = arena_create(256 * 1024);
+    if (temp_arena) {
+      Jsonv_Arena *temp_jsonv_arena = jsonv_arena_new_custom(&my_jsonv_ops, temp_arena);
+      if (temp_jsonv_arena) {
+        Jsonv_Obj *projected_outputs = jsonv_obj_new(temp_jsonv_arena, NULL);
+        Jsonv_Value context_val = jsonv_val_obj(outcome_obj);
+
+        VariableAST *curr = step->outputs_head;
+        while (curr) {
+          Jsonv_Value val = jsonv_val_undefined();
+          int32_t status = evaluate_expression(temp_arena, curr->expression, temp_jsonv_arena, context_val, &val);
+          char *name_cstr = allocate_jsonv_string(temp_arena, curr->name.data, curr->name.length);
+          if (status == ERR_SUCCESS) {
+            jsonv_obj_set(temp_jsonv_arena, projected_outputs, name_cstr, val);
+          } else {
+            jsonv_obj_set(temp_jsonv_arena, projected_outputs, name_cstr, jsonv_val_null());
+          }
+          curr = curr->next;
+        }
+
+        int sz = jsonv_serialize(jsonv_val_obj(projected_outputs), NULL, 0);
+        if (sz >= 0) {
+          char *serialized_buf = na_alloc(arena, sz + 1);
+          if (serialized_buf) {
+            jsonv_serialize(jsonv_val_obj(projected_outputs), serialized_buf, sz + 1);
+
+            arena_destroy(temp_arena);
+            temp_arena = NULL;
+
+            Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+            if (temp_ctx) {
+              if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)serialized_buf)) {
+                Jsonv_Value main_projected_val;
+                jsonv_ctx_get_value(temp_ctx, &main_projected_val);
+
+                char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
+                jsonv_obj_set(jsonv_arena, outcome_obj, k_outputs, main_projected_val);
+
+                char *k_body = allocate_jsonv_string(arena, "body", 4);
+                char *k_stderr = allocate_jsonv_string(arena, "stderr", 6);
+                jsonv_obj_set(jsonv_arena, outcome_obj, k_body, jsonv_val_null());
+                jsonv_obj_set(jsonv_arena, outcome_obj, k_stderr, jsonv_val_null());
+              }
+            }
+          }
+        }
+      }
+      if (temp_arena) {
+        arena_destroy(temp_arena);
+      }
+    }
+  }
+
   char *step_id_cstr = allocate_jsonv_string(arena, step->id.data, step->id.length);
   jsonv_obj_set(jsonv_arena, aj->steps_state_obj.as.p, step_id_cstr, jsonv_val_obj(outcome_obj));
 
