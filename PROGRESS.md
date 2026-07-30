@@ -36,19 +36,19 @@
 
 ## Phase 1.5: Declarative C Pipelines & Terraform Paradigms (Upcoming)
 
-- [ ] **Stage 14: Job/Step Variables (Public vs. Private)**
-  - [ ] Enforce snake_case/camelCase keys and resolve cycle checks (`ERR_CYCLIC_DEP`)
-  - [ ] Support private variable scope (non-serialized) and public outputs (`jobs.<id>.outputs.<name>`)
-- [ ] **Stage 14.5: Step-Level Outcome Projection**
-  - [ ] Project subset fields immediately and release large response payloads from arena memory
-- [ ] **Stage 15: Global Provider Configurations & Session Reuse**
-  - [ ] Centralized provider blocks for Postgres/HTTP pooling and secrets injection
-- [ ] **Stage 15.5: State Backends & Execution Locking (.nestor.tfstate)**
-  - [ ] Serialize state frames and lock engine runs on asynchronous gates
-- [ ] **Stage 16: Data Sources vs. Resources Split**
-  - [ ] Cache read-only data sources; serialize write resources under strict order
-- [ ] **Stage 16.5: Declarative YAML Providers**
-  - [ ] Allow no-code YAML provider mappings to wrap native features, SQL, and plugins
+- [x] **Stage 14: Job/Step Variables (Public vs. Private)**
+  - [x] Enforce snake_case/camelCase keys and resolve cycle checks (`ERR_CYCLIC_DEP`)
+  - [x] Support private variable scope (non-serialized) and public outputs (`jobs.<id>.outputs.<name>`)
+- [x] **Stage 14.5: Step-Level Outcome Projection**
+  - [x] Project subset fields immediately and release large response payloads from arena memory
+- [x] **Stage 15: Global Provider Configurations & Session Reuse**
+  - [x] Centralized provider blocks for Postgres/HTTP pooling and secrets injection
+- [x] **Stage 15.5: State Backends & Execution Locking (.nestor.tfstate)**
+  - [x] Serialize state frames and lock engine runs on asynchronous gates
+- [x] **Stage 16: Data Sources vs. Resources Split**
+  - [x] Cache read-only data sources; serialize write resources under strict order
+- [x] **Stage 16.5: Declarative YAML Providers**
+  - [x] Allow no-code YAML provider mappings to wrap native features, SQL, and plugins
 
 ---
 
