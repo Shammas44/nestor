@@ -275,6 +275,18 @@ Executes an operation exposed by a globally configured provider, dynamically rou
 }
 ```
 
+### 4.5 Step-Level `on_error` Fallbacks
+Steps can define a fallback outcome object to be returned if the step fails (e.g., timeout or non-2xx HTTP status), allowing the pipeline to proceed gracefully.
+```json
+{
+  "id": "fetch_metadata",
+  "http": { "method": "GET", "url": "https://api.com/metadata" },
+  "on_error": {
+    "fallback": { "status": "offline", "data": [] }
+  }
+}
+```
+
 ---
 
 ## 5. Global Provider Configurations & Session Reuse
@@ -355,6 +367,11 @@ Nestor automatically caches task outcomes (status codes, outputs, response bodie
 ### 7.2 Observability & Redaction
 Employs a high-speed Aho-Corasick keyword matching trie to identify sensitive keys (e.g. `secrets` block) on the fly, redacting them (`***`) automatically in all stderr/stdout stream printouts and workspace outputs before writing files.
 
+### 7.3 Data Sources vs. Resources Split
+To optimize execution paths and prevent cache corruption, Nestor classifies pipeline steps into:
+* **Data Sources (Read-Only)**: Side-effect-free steps (e.g. GET/HEAD HTTP requests or query plugins). These are cached in the SQLite DB and executed in parallel by the scheduler.
+* **Resources (Mutative)**: Mutative actions (e.g. POST, PUT, DELETE, PATCH HTTP requests or mutative plugins). These bypass caching completely and execute serially (blocking other executions).
+
 ---
 
 ## 8. Deterministic Graph Boundaries
@@ -397,4 +414,43 @@ A workflow can designate terminal exit jobs using `"end"` or `"return"` properti
 ### 8.3 Join Dominance Concurrency Check
 To prevent dangling concurrent branches or race conditions, any path traversing a `fork` job node **must** pass through a `join` job node before hitting any exit node (where `is_end == true` or a `return` expression is defined).
 If any concurrent branch of a `fork` reaches an exit job without a synchronizing `join`, compilation fails.
+
+---
+
+## 9. State Backends & Execution Locking
+
+Nestor supports state serialization to backend storage (defaulting to local `.tfstate` files).
+* **Execution Suspension**: When hitting a `wait_signal` or timer node, the engine serializes the active stack frames, variables, scheduler queue, and bitstack states to a `.nestor.tfstate` file and halts execution.
+* **Execution Locks**: To prevent concurrent execution conflicts, Nestor acquires a `.tfstate.lock` file on the workflow name at startup. If the lock is already held, Nestor exits with `ERR_LOCKED`.
+* **Resuming state**: Upon receiving a trigger signal, Nestor verifies lock integrity, reads the state file, and resumes execution from the suspension boundary.
+
+---
+
+## 10. Declarative YAML Providers
+
+Declarative providers allow developers to wrap REST APIs, databases, or plugins into reusable operations without compiling C code.
+* Provider contracts are loaded dynamically from the `./providers` directory at engine startup.
+* Operations are declared in YAML, mapping parameters and input types to a target plugin (`uses`) evaluated against a custom sub-context.
+
+### 10.1 Declarative Provider Example (`providers/stripe.yaml`)
+```yaml
+provider: stripe
+description: Stripe payment gateway wrapper
+configuration:
+  api_key: "${{ secrets.stripe_key }}"
+
+operations:
+  charge_customer:
+    uses: stripe.charge
+    args:
+      amount: "${{ inputs.amount }}"
+      currency: "usd"
+      customer: "${{ inputs.customer_id }}"
+    inputs:
+      amount: { type: number, required: true }
+      customer_id: { type: string, required: true }
+    outputs:
+      charge_id: "body.id"
+      status: "body.status"
+```
 
