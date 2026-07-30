@@ -6,6 +6,43 @@ Workflows in Nestor are specified as scenarios in either **JSON** or **YAML** fo
 
 ---
 
+## CLI Usage & Subcommands
+
+Nestor compiles into a single binary (`bin/main`). It supports both standard AST-based execution (via standard input) and advanced workspace/bytecode commands:
+
+### 1. Direct AST Execution
+To run a single workflow scenario directly, pipe the YAML or JSON contents to the binary:
+```bash
+# Basic run
+cat scenario.yaml | bin/main
+
+# Run with inputs, secrets, and debug logs
+cat scenario.yaml | bin/main user_id=admin tier=enterprise --debug
+```
+* **Inputs**: Provided as command-line key-value pairs (e.g. `key=val`).
+* **Secrets**: Passed as environment variables prefixed with `NESTOR_SECRET_` (e.g. `NESTOR_SECRET_API_KEY=xxx`).
+* **Debug Logging**: Enabled using the `--debug`, `-d`, or `--verbose` flags.
+
+### 2. Workspace Validation (`plan`)
+Checks a target directory structure (including files in the `./providers` and `./workflows` folders) for syntax errors, contract integrity, name validations, and dependency cycles:
+```bash
+bin/main plan <workspace_directory>
+```
+
+### 3. Bytecode Compilation (`compile`)
+Compiles a scenario workspace into a single serialized binary bytecode file (`.nbc`) containing the constant pool and graph VM instructions:
+```bash
+bin/main compile <workspace_directory> -o output.nbc
+```
+
+### 4. VM Runtime Execution (`apply`)
+Loads and executes a pre-compiled bytecode file on the register-based Nestor Virtual Machine (NVM) runtime:
+```bash
+bin/main apply output.nbc
+```
+
+---
+
 ## 1. Scenario Structure Overview
 
 Every Nestor scenario file contains four top-level keys:
