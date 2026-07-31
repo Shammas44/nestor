@@ -1,7 +1,7 @@
 provider: swapi
 description: Declarative SWAPI provider wrapper
 configuration:
-  base_url: "https://swapi.dev/api"
+  base_url: "https://swapi.info/api"
 
 operations:
   get_person:

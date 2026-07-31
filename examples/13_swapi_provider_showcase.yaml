@@ -4,7 +4,7 @@ on: { manual: {} }
 
 providers:
   swapi:
-    base_url: "https://swapi.dev/api"
+    base_url: "https://swapi.info/api"
 
 jobs:
   fetch_luke:

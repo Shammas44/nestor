@@ -437,6 +437,9 @@ END_TIMED_TEST
 TIMED_TEST(examples, swapi_provider_showcase, init, fini)
 /*#region*/
   Arena *arena = arena_create(1024 * 1024);
+  transport_mock_add_response("swapi.info/api/people/1/", "GET", 200, "{\"name\": \"Luke Skywalker\", \"homeworld\": \"https://swapi.info/api/planets/1/\"}");
+  transport_mock_add_response("swapi.info/api/starships/10/", "GET", 200, "{\"name\": \"Millennium Falcon\", \"passengers\": \"6\"}");
+
   Jsonv_Value ctx = run_example_test(arena, "examples/13_swapi_provider_showcase.yaml");
 
   // Check step execution success
