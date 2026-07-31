@@ -110,7 +110,7 @@ void cache_generate_key(const char *job_type, const char *spec_json, const char 
   sha256_final(&ctx, hash);
 
   for (int i = 0; i < 32; i++) {
-    sprintf(out_hex + (i * 2), "%02x", hash[i]);
+    snprintf(out_hex + (i * 2), 3, "%02x", hash[i]);
   }
   out_hex[64] = '\0';
   /*#endregion*/

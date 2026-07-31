@@ -190,7 +190,7 @@ int32_t plugin_start(PluginExecutor *pe, Arena *arena, Jsonv_Arena *jsonv_arena,
           pe->child_resp_buf.buf = na_alloc(arena, needed_cap);
           if (pe->child_resp_buf.buf) {
             pe->child_resp_buf.cap = needed_cap;
-            sprintf(pe->child_resp_buf.buf, "{\"status_code\": %d, \"outputs\": %s}", exec_rc, outputs_str);
+            snprintf(pe->child_resp_buf.buf, pe->child_resp_buf.cap, "{\"status_code\": %d, \"outputs\": %s}", exec_rc, outputs_str);
             pe->child_resp_buf.len = strlen(pe->child_resp_buf.buf);
           }
 
