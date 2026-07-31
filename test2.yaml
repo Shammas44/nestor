@@ -1,0 +1,34 @@
+version: "2.0.0"
+name: swapi_provider_showcase
+on: { manual: {} }
+
+providers:
+  swapi:
+    base_url: "https://swapi.info/api"
+
+jobs:
+  fetch_luke:
+    type: task
+    steps:
+      - id: get_luke
+        provider: swapi.get_person
+        args:
+          id: 1
+      - id: get_ship
+        provider: swapi.get_starship
+        args:
+          id: 10
+      - id: get_all_ships
+        provider: swapi.get_all_starships
+    cache: false
+    variables:
+      - name: local_arg
+        expression: "'hello_variables'"
+        visibility: public
+        
+    return:
+      ships: "${{ jobs.fetch_luke.steps.get_all_ships.body }}"
+      local_arg: "${{ jobs.fetch_luke.outputs.local_arg }}"
+      person_name: "${{ jobs.fetch_luke.steps.get_luke.outputs.name }}"
+      ship_name: "${{ jobs.fetch_luke.steps.get_ship.outputs.name }}"
+      passengers: "${{ jobs.fetch_luke.steps.get_ship.outputs.passengers }}"
