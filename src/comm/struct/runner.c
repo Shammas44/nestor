@@ -1683,6 +1683,7 @@ static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
 
           Jsonv_Obj *sub_root = jsonv_obj_new(jsonv_arena, NULL);
           jsonv_obj_set(jsonv_arena, sub_root, "inputs", resolved_args);
+          jsonv_obj_set(jsonv_arena, sub_root, "configuration", resolved_config);
 
           Jsonv_Value sec_val;
           if (jsonv_obj_get(context_val->as.p, "secrets", &sec_val)) {

@@ -2,6 +2,7 @@
 #include "parser.h"
 #include "cache.h"
 #include "aho_corasick.h"
+#include "loader.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -219,6 +220,14 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Compilation Error: DAG Compiler failed with code %d\n", compile_status);
     arena_destroy(arena);
     return 1;
+  }
+
+  // Load workspace map to resolve declarative providers/workflows if they exist
+  WorkspaceMap *map = na_alloc(arena, sizeof(WorkspaceMap));
+  if (map) {
+    memset(map, 0, sizeof(WorkspaceMap));
+    workspace_load_directory(arena, ".", map);
+    ast.providers_map = map;
   }
 
   // 4. Setup Context Object
