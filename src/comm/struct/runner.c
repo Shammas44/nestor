@@ -1707,7 +1707,10 @@ static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
 
             Jsonv_Value v_outputs;
             if (jsonv_obj_get(op_val.as.p, "outputs", &v_outputs) && v_outputs.tag == JSONV_VAL_OBJ) {
-              build_outputs_ast(arena, v_outputs, &temp_step.outputs_head);
+              if (!step->outputs_head) {
+                build_outputs_ast(arena, v_outputs, &step->outputs_head);
+              }
+              temp_step.outputs_head = step->outputs_head;
             }
 
             char *uses_str = sv_to_cstring(arena, (StringView){v_uses.as.p, jsonv_val_str_len(v_uses)});

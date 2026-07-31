@@ -1,0 +1,27 @@
+provider: swapi
+description: Declarative SWAPI provider wrapper
+configuration:
+  base_url: "https://swapi.dev/api"
+
+operations:
+  get_person:
+    uses: http
+    args:
+      method: GET
+      url: "${{ configuration.base_url }}/people/${{ inputs.id }}/"
+    inputs:
+      id: { type: number, required: true }
+    outputs:
+      name: "body.name"
+      homeworld: "body.homeworld"
+
+  get_starship:
+    uses: http
+    args:
+      method: GET
+      url: "${{ configuration.base_url }}/starships/${{ inputs.id }}/"
+    inputs:
+      id: { type: number, required: true }
+    outputs:
+      name: "body.name"
+      passengers: "body.passengers"

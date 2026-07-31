@@ -434,3 +434,32 @@ TIMED_TEST(examples, bigdata_test, init, fini)
 /*#endregion*/
 END_TIMED_TEST
 
+TIMED_TEST(examples, swapi_provider_showcase, init, fini)
+/*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+  Jsonv_Value ctx = run_example_test(arena, "examples/13_swapi_provider_showcase.yaml");
+
+  // Check step execution success
+  int64_t luke_status = get_step_status_code(arena, ctx.as.p, "fetch_luke", "get_luke");
+  cr_assert_eq(luke_status, 200);
+  int64_t ship_status = get_step_status_code(arena, ctx.as.p, "fetch_luke", "get_ship");
+  cr_assert_eq(ship_status, 200);
+
+  // Check return values
+  Jsonv_Value outputs_val;
+  cr_assert(jsonv_obj_get(ctx.as.p, "outputs", &outputs_val));
+
+  Jsonv_Value person_val, ship_val, passengers_val;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "person_name", &person_val));
+  cr_assert(sv_equals_cstr((StringView){person_val.as.p, jsonv_val_str_len(person_val)}, "Luke Skywalker"));
+
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "ship_name", &ship_val));
+  cr_assert(sv_equals_cstr((StringView){ship_val.as.p, jsonv_val_str_len(ship_val)}, "Millennium Falcon"));
+
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "passengers", &passengers_val));
+  cr_assert(sv_equals_cstr((StringView){passengers_val.as.p, jsonv_val_str_len(passengers_val)}, "6"));
+
+  arena_destroy(arena);
+/*#endregion*/
+END_TIMED_TEST
+

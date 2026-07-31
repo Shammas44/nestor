@@ -1,0 +1,24 @@
+version: "2.0.0"
+name: swapi_provider_showcase
+on: { manual: {} }
+
+providers:
+  swapi:
+    base_url: "https://swapi.dev/api"
+
+jobs:
+  fetch_luke:
+    type: task
+    steps:
+      - id: get_luke
+        provider: swapi.get_person
+        args:
+          id: 1
+      - id: get_ship
+        provider: swapi.get_starship
+        args:
+          id: 10
+    return:
+      person_name: "${{ jobs.fetch_luke.steps.get_luke.outputs.name }}"
+      ship_name: "${{ jobs.fetch_luke.steps.get_ship.outputs.name }}"
+      passengers: "${{ jobs.fetch_luke.steps.get_ship.outputs.passengers }}"
