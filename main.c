@@ -321,6 +321,10 @@ int main(int argc, char **argv) {
 
   if (has_outputs && !debug_mode) {
     to_serialize = outputs_val;
+  } else if (!debug_mode) {
+    Jsonv_Obj *clean_obj = jsonv_obj_new(jsonv_arena, NULL);
+    jsonv_obj_set(jsonv_arena, clean_obj, allocate_jsonv_string(arena, "status"), jsonv_val_str(allocate_jsonv_string(arena, "success")));
+    to_serialize = jsonv_val_obj(clean_obj);
   } else {
     Jsonv_Obj *clean_obj = jsonv_obj_new(jsonv_arena, NULL);
     Jsonv_Value jobs_val;
