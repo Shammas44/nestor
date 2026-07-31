@@ -418,6 +418,31 @@ Nestor automatically caches task outcomes (status codes, outputs, response bodie
 * **Cache Revalidation**: Supports HTTP revalidation. If a cached response has `ETag` or `Last-Modified` headers, subsequent runs automatically send `If-None-Match` or `If-Modified-Since` headers to the server. If the server returns `304 Not Modified`, Nestor restores the cached payload.
 * **Eviction Policies**: Employs TTL (Time-To-Live) verification and LRU (Least-Recently Used) eviction to automatically prune old entries.
 
+#### Granular Cache Controls & Overrides
+To prevent stale cache entries, Nestor provides both CLI-level and YAML-level controls:
+* **Global CLI Override**: Run commands with the `--no-cache` or `--ignore-cache` flag (or set the environment variable `NESTOR_NO_CACHE=true`) to bypass all cache lookups and storage.
+  ```bash
+  cat examples/13_swapi_provider_showcase.yaml | ./bin/main --no-cache
+  ```
+* **Job-Level Disabling**: Disable caching for a specific job entirely by setting `cache: false` or `cache: { enabled: false }` under the job definition:
+  ```yaml
+  jobs:
+    fetch_user:
+      type: task
+      cache: false
+      steps: [...]
+  ```
+* **Job-Level TTL Override**: Define a custom cache duration / maximum age on a job using `cache: { ttl: <duration> }`. Supports raw integer seconds or string durations (e.g., `30s`, `5m`, `2h`, `1d`):
+  ```yaml
+  jobs:
+    temporary_data:
+      type: task
+      cache:
+        enabled: true
+        ttl: "15m"  # Cache is valid for at most 15 minutes
+      steps: [...]
+  ```
+
 ### 7.2 Observability & Redaction
 Employs a high-speed Aho-Corasick keyword matching trie to identify sensitive keys (e.g. `secrets` block) on the fly, redacting them (`***`) automatically in all stderr/stdout stream printouts and workspace outputs before writing files.
 

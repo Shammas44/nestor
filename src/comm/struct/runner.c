@@ -1962,7 +1962,7 @@ static bool job_has_resource(JobNode *job) {
 
 static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj) {
   /*#region*/
-  if (job_has_resource(job)) {
+  if (job_has_resource(job) || !job->cache_enabled) {
     return;
   }
   const char *no_cache_env = getenv("NESTOR_NO_CACHE");
@@ -2021,6 +2021,12 @@ static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value conte
     }
   }
 
+  if (job->has_cache_ttl) {
+    if (ttl_seconds == -1 || job->cache_ttl < ttl_seconds) {
+      ttl_seconds = job->cache_ttl;
+    }
+  }
+
   if (no_store) {
     return;
   }
@@ -2072,7 +2078,7 @@ static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value conte
 
 static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, JobNode *job, ActiveJob *aj_out) {
   /*#region*/
-  if (job_has_resource(job)) {
+  if (job_has_resource(job) || !job->cache_enabled) {
     return false;
   }
   const char *no_cache_env = getenv("NESTOR_NO_CACHE");

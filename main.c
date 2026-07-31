@@ -121,6 +121,12 @@ int main(int argc, char **argv) {
   /*#region*/
   setenv("MallocNanoZone", "0", 1);
 
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--no-cache") == 0 || strcmp(argv[i], "--ignore-cache") == 0) {
+      setenv("NESTOR_NO_CACHE", "true", 1);
+    }
+  }
+
   // 1. Initialize memory arena
   Arena *arena = arena_create(1024 * 1024);
   if (!arena) {

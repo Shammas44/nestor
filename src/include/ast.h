@@ -118,6 +118,10 @@ struct JobNode {
   bool is_end;
   StringView return_expr;
 
+  bool cache_enabled;
+  bool has_cache_ttl;
+  int32_t cache_ttl;
+
   union {
     struct {
       StepNode *steps_head;

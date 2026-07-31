@@ -1461,3 +1461,89 @@ TIMED_TEST(stage8, stream_parsing_and_chunk_loop, init, fini)
   /*#endregion*/
 END_TIMED_TEST
 
+TIMED_TEST(stage8, custom_cache_overrides, init, fini)
+/*#region*/
+  Arena *arena = arena_create(1024 * 1024);
+
+  const char *yaml =
+    "version: \"2.0.0\"\n"
+    "name: custom_cache_overrides_test\n"
+    "on:\n"
+    "  manual: {}\n"
+    "\n"
+    "jobs:\n"
+    "  no_cache_job:\n"
+    "    type: task\n"
+    "    cache: false\n"
+    "    steps:\n"
+    "      - id: run_step\n"
+    "        http:\n"
+    "          method: GET\n"
+    "          url: \"http://127.0.0.1:8080/no_cache\"\n"
+    "\n"
+    "  ttl_cache_job:\n"
+    "    type: task\n"
+    "    depends_on: no_cache_job\n"
+    "    cache:\n"
+    "      enabled: true\n"
+    "      ttl: \"5s\"\n"
+    "    steps:\n"
+    "      - id: run_step\n"
+    "        http:\n"
+    "          method: GET\n"
+    "          url: \"http://127.0.0.1:8080/ttl_cache\"\n";
+
+  WorkflowAST ast;
+  int32_t status = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  status = compile_workflow(arena, &ast);
+  cr_assert_eq(status, ERR_SUCCESS);
+
+  // Assert AST properties
+  JobNode *no_cache_job = ast.jobs_head;
+  JobNode *ttl_cache_job = ast.jobs_head->next_sorted;
+  if (strcmp(no_cache_job->id.data, "no_cache_job") != 0) {
+    JobNode *tmp = no_cache_job;
+    no_cache_job = ttl_cache_job;
+    ttl_cache_job = tmp;
+  }
+
+  cr_assert_eq(no_cache_job->cache_enabled, false);
+  cr_assert_eq(ttl_cache_job->cache_enabled, true);
+  cr_assert_eq(ttl_cache_job->has_cache_ttl, true);
+  cr_assert_eq(ttl_cache_job->cache_ttl, 5);
+
+  Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+  jsonv_obj_set(jsonv_arena, root_obj, allocate_jsonv_string(arena, "env"), jsonv_val_obj(env_obj));
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  // Setup transport expectations
+  transport_mock_clear();
+  transport_mock_add_response("http://127.0.0.1:8080/no_cache", "GET", 200, "{\"ok\": 1}");
+  transport_mock_add_response("http://127.0.0.1:8080/ttl_cache", "GET", 200, "{\"ok\": 2}");
+
+  // First run
+  Transport *mock_trans = transport_mock_new(arena);
+  int32_t run_status = run_workflow_opt(arena, &ast, &context_val, mock_trans);
+  cr_assert_eq(run_status, ERR_SUCCESS);
+  mock_trans->ops->destroy(mock_trans);
+
+  // Second run: no_cache should hit mock again, ttl_cache should hit cache
+  transport_mock_clear();
+  // Register mock response for no_cache ONLY (so if ttl_cache queries it, it will fail/crash)
+  transport_mock_add_response("http://127.0.0.1:8080/no_cache", "GET", 200, "{\"ok\": 11}");
+
+  Transport *mock_trans2 = transport_mock_new(arena);
+  int32_t run_status2 = run_workflow_opt(arena, &ast, &context_val, mock_trans2);
+  cr_assert_eq(run_status2, ERR_SUCCESS);
+  mock_trans2->ops->destroy(mock_trans2);
+
+  arena_destroy(arena);
+/*#endregion*/
+END_TIMED_TEST
+

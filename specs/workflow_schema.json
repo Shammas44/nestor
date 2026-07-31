@@ -142,6 +142,24 @@
               { "type": "object" },
               { "type": "array" }
             ]
+          },
+          "cache": {
+            "anyOf": [
+              { "type": "boolean" },
+              {
+                "type": "object",
+                "properties": {
+                  "enabled": { "type": "boolean" },
+                  "ttl": {
+                    "anyOf": [
+                      { "type": "integer" },
+                      { "type": "string" }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
           }
         }
       }

@@ -1124,6 +1124,55 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
       job->return_expr.length = 0;
     }
 
+    // Parse Cache configuration
+    job->cache_enabled = true;
+    job->has_cache_ttl = false;
+    job->cache_ttl = 0;
+    Jsonv_Value v_cache;
+    if (jsonv_obj_get(job_spec_val.as.p, "cache", &v_cache)) {
+      if (v_cache.tag == JSONV_VAL_BOOLEAN) {
+        job->cache_enabled = v_cache.as.boolean;
+      } else if (v_cache.tag == JSONV_VAL_OBJ) {
+        Jsonv_Value v_enabled;
+        if (jsonv_obj_get(v_cache.as.p, "enabled", &v_enabled)) {
+          if (v_enabled.tag == JSONV_VAL_BOOLEAN) {
+            job->cache_enabled = v_enabled.as.boolean;
+          }
+        }
+        Jsonv_Value v_ttl;
+        if (jsonv_obj_get(v_cache.as.p, "ttl", &v_ttl)) {
+          if (v_ttl.tag == JSONV_VAL_INT) {
+            job->has_cache_ttl = true;
+            job->cache_ttl = (int32_t)v_ttl.as.i;
+          } else if (v_ttl.tag == JSONV_VAL_STRING) {
+            const char *ttl_str = v_ttl.as.p;
+            size_t ttl_len = jsonv_val_str_len(v_ttl);
+            int32_t multiplier = 1;
+            if (ttl_len > 1) {
+              char unit = ttl_str[ttl_len - 1];
+              if (unit == 's' || unit == 'S') multiplier = 1;
+              else if (unit == 'm' || unit == 'M') multiplier = 60;
+              else if (unit == 'h' || unit == 'H') multiplier = 3600;
+              else if (unit == 'd' || unit == 'D') multiplier = 86400;
+            }
+            int32_t val = 0;
+            size_t digits = (ttl_len > 1 && (ttl_str[ttl_len - 1] == 's' || ttl_str[ttl_len - 1] == 'S' ||
+                                              ttl_str[ttl_len - 1] == 'm' || ttl_str[ttl_len - 1] == 'M' ||
+                                              ttl_str[ttl_len - 1] == 'h' || ttl_str[ttl_len - 1] == 'H' ||
+                                              ttl_str[ttl_len - 1] == 'd' || ttl_str[ttl_len - 1] == 'D'))
+                            ? ttl_len - 1 : ttl_len;
+            for (size_t d = 0; d < digits; d++) {
+              if (ttl_str[d] >= '0' && ttl_str[d] <= '9') {
+                val = val * 10 + (ttl_str[d] - '0');
+              }
+            }
+            job->has_cache_ttl = true;
+            job->cache_ttl = val * multiplier;
+          }
+        }
+      }
+    }
+
     // Extract Type
     Jsonv_Value v_type;
     NodeType type = NODE_TASK;
