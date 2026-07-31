@@ -25,3 +25,9 @@ operations:
     outputs:
       name: "body.name"
       passengers: "body.passengers"
+
+  get_all_starships:
+    uses: http
+    args:
+      method: GET
+      url: "${{ configuration.base_url }}/starships"

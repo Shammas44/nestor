@@ -18,7 +18,14 @@ jobs:
         provider: swapi.get_starship
         args:
           id: 10
+    cache: false
+    variables:
+      - name: local_arg
+        expression: "'hello_variables'"
+        visibility: public
+        
     return:
+      local_arg: "${{ jobs.fetch_luke.outputs.local_arg }}"
       person_name: "${{ jobs.fetch_luke.steps.get_luke.outputs.name }}"
       ship_name: "${{ jobs.fetch_luke.steps.get_ship.outputs.name }}"
       passengers: "${{ jobs.fetch_luke.steps.get_ship.outputs.passengers }}"
