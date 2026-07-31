@@ -233,7 +233,82 @@ Variables accept a `"visibility"` property (`"private"` or `"public"`), defaulti
 * **`private`**: The variable is only accessible locally within the job/step's execution stack. It is evaluated in-memory and is excluded from SQLite DB state serialization to optimize database size.
 * **`public`**: The variable is exposed to downstream execution nodes, serialized, and published under the job outcomes at `jobs.<job_id>.outputs.<var_name>`.
 
-### 3.2 Cycle Checks & Name Validation
+### 3.2 Using Variables Across Scope Levels
+Variables can be referenced inside dynamic expressions (e.g. step outputs, loop conditions, transform expressions) or string interpolation templates (`${{ var_name }}`). Nestor searches for variables using lexical scoping (Step -> Job -> Workflow Root).
+
+#### 1. Workflow-Root (Global) Variables
+* **Scope**: Accessible globally by any job or step within the workflow.
+* **Usage**: Reference the variable name directly in any expression or string template.
+* **Example**:
+  ```yaml
+  variables:
+    - name: api_base_url
+      expression: "'https://api.example.com/v1'"
+  jobs:
+    fetch_users:
+      type: task
+      steps:
+        - id: get_list
+          http:
+            method: GET
+            # String interpolation reference
+            url: "${{ api_base_url }}/users"
+  ```
+
+#### 2. Job-Level Variables
+* **Scope**: Local to the declaring job and its steps. If visibility is `"public"`, it is also published under the job outputs and can be accessed by downstream jobs.
+* **Usage**:
+  * **Within the job/steps**: Reference the name directly (e.g. `job_var`).
+  * **In downstream jobs**: Reference the output path (e.g. `jobs.declaring_job.outputs.job_var`).
+* **Example**:
+  ```yaml
+  jobs:
+    generate_token:
+      type: task
+      variables:
+        - name: auth_token
+          expression: "'Bearer ' & steps.auth_request.outputs.token"
+          visibility: public  # Expose to downstream jobs
+      steps:
+        - id: auth_request
+          http:
+            method: POST
+            url: "https://api.example.com/oauth/token"
+            body: { "client_id": "nestor" }
+
+    fetch_data:
+      type: task
+      depends_on: generate_token
+      steps:
+        - id: query_api
+          http:
+            method: GET
+            url: "https://api.example.com/data"
+            headers:
+              # Downstream job reference
+              Authorization: "${{ jobs.generate_token.outputs.auth_token }}"
+  ```
+
+#### 3. Step-Level Variables
+* **Scope**: Local to the step. Used to calculate intermediate values from step outputs or configurations before evaluating projections.
+* **Usage**: Reference the name directly within the step's parameters (like URL, body, or headers).
+* **Example**:
+  ```yaml
+  jobs:
+    query:
+      type: task
+      steps:
+        - id: search_users
+          variables:
+            - name: query_param
+              expression: "'admin'"
+          http:
+            method: GET
+            # Reference local step variable
+            url: "https://api.example.com/search?q=${{ query_param }}"
+  ```
+
+### 3.3 Cycle Checks & Name Validation
 * **Cycle Check**: During compilation, Nestor topologically sorts variable dependencies. Any cyclic references (e.g. `var_a` referencing `var_b` which references `var_a`) will fail compilation with `ERR_CYCLIC_DEP`.
 * **Name Validation**: Variable names must follow standard naming rules (snake_case/camelCase: must start with an alpha character or underscore, followed only by alphanumeric characters or underscores). Invalid names fail compilation.
 
