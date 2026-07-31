@@ -27,8 +27,5 @@ jobs:
         visibility: public
         
     return:
-      ships: "${{ jobs.fetch_luke.steps.get_all_ships.body }}"
-      local_arg: "${{ jobs.fetch_luke.outputs.local_arg }}"
-      person_name: "${{ jobs.fetch_luke.steps.get_luke.outputs.name }}"
-      ship_name: "${{ jobs.fetch_luke.steps.get_ship.outputs.name }}"
-      passengers: "${{ jobs.fetch_luke.steps.get_ship.outputs.passengers }}"
+      ships: "${{ jobs.fetch_luke.steps.get_all_ships.body.{'name': name, 'model': model, 'starship_class': starship_class, 'passengers': passengers, 'pilots': pilots} }}"
+      passenger_sum: '${{ $sum(jobs.fetch_luke.steps.get_all_ships.body.($number(passengers))) }}'
