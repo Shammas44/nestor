@@ -1,6 +1,6 @@
 Nestor Orchestration Engine - Examples and Testing Scenarios
 
-This directory contains nineteen scenarios showing the configuration language and capabilities of the Nestor CLI execution engine.
+This directory contains twenty-three scenarios showing the configuration language and capabilities of the Nestor CLI execution engine.
 
 ================================================================================
 EASY TESTING: RUN SCENARIOS VIA SHELL SCRIPT
@@ -263,6 +263,38 @@ SCENARIO 19: Nestor Advanced Features Showcase
   cat examples/10_showcase_advanced_features.json | ./bin/main param_in=e2e_showcase | jq
 - Expected Outcome:
   Runs both inline and sandboxed dynamic plugin executions, synchronizes their outcomes via depends_on conditions, transforms the data using native JSONata, and triggers a cache-revalidated HTTP GET request.
+
+================================================================================
+SCENARIO 20: Multi-Region Employee Directory Sync
+================================================================================
+- File: examples/09_multi_region_employees.yaml
+- Purpose: Models a coordinated multi-region workflow that logs into regional endpoints, queries employees under age 30, loops over details, and runs data filters.
+- How to Run:
+  cat examples/09_multi_region_employees.yaml | ./bin/main
+
+================================================================================
+SCENARIO 21: Constant-Memory Big Data Stream Chunking
+================================================================================
+- File: examples/11_bigdata_test.yaml
+- Purpose: Demonstrates high-performance, constant-memory chunk processing on streaming datasets using the `stream_chunk` loop driver.
+- How to Run:
+  cat examples/11_bigdata_test.yaml | ./bin/main
+
+================================================================================
+SCENARIO 22: Nestor Phase 1.5 Advanced Feature Showcase
+================================================================================
+- File: examples/12_showcase_phase_1_5.yaml
+- Purpose: Demonstrates all new Phase 1.5 capabilities (workflow variables, private/public variables, step outcome projections, step error fallbacks, and declarative YAML provider execution).
+- How to Run:
+  cat examples/12_showcase_phase_1_5.yaml | ./bin/main --debug
+
+================================================================================
+SCENARIO 23: SWAPI Provider Showcase
+================================================================================
+- File: examples/13_swapi_provider_showcase.yaml
+- Purpose: Demonstrates using the declarative `swapi` provider to fetch character and starship details via output projections.
+- How to Run:
+  cat examples/13_swapi_provider_showcase.yaml | ./bin/main
 
 
 
