@@ -1,4 +1,5 @@
 #include "bytecode.h"
+#include "compiler.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,6 +96,8 @@ int32_t bytecode_compile_workflow(Arena *arena, WorkflowAST *ast, const char *ou
 int32_t bytecode_compile_workspace(Arena *arena, WorkspaceMap *map, const char *output_nbc_path) {
   /*#region*/
   if (!map || !map->root_workflow) return ERR_INVALID_BOUNDARY;
+  int32_t compile_res = compile_workflow(arena, &map->root_workflow->ast);
+  if (compile_res != ERR_SUCCESS) return compile_res;
   return bytecode_compile_workflow(arena, &map->root_workflow->ast, output_nbc_path);
   /*#endregion*/
 }

@@ -189,13 +189,20 @@ int main(int argc, char **argv) {
           return 1;
         }
         int32_t exec_res = nvm_execute_loop(&nvm_ctx);
-        nvm_close(&nvm_ctx);
         if (exec_res != ERR_SUCCESS) {
           fprintf(stderr, "NVM execution error %d\n", exec_res);
+          nvm_close(&nvm_ctx);
           arena_destroy(arena);
           return 1;
         }
         printf("NVM Execution Completed Successfully.\n");
+        printf("Final VM Stack Trace:\n");
+        for (uint32_t i = 0; i < nvm_ctx.sp; i++) {
+          printf("  [%u]: ", i);
+          print_jsonv_value(nvm_ctx.stack[i]);
+          printf("\n");
+        }
+        nvm_close(&nvm_ctx);
         arena_destroy(arena);
         return 0;
       }
