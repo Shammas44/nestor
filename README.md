@@ -184,6 +184,18 @@ Performs inline data mappings using JSONata expressions, publishing the result u
 }
 ```
 
+### 2.7 File Exports (`"type": "export"`)
+Evaluates any JSONata expression or referenced context values and writes the serialized output directly to a file on disk.
+```json
+"write_results": {
+  "type": "export",
+  "spec": {
+    "file": "output.json",
+    "data": "${{ jobs.upstream_job.steps.step_id.body }}"
+  }
+}
+```
+
 ---
 
 ## 3. Scoping & Variables (Public vs. Private)
