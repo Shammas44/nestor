@@ -46,7 +46,7 @@ int32_t bytecode_compile_workflow(Arena *arena, WorkflowAST *ast, const char *ou
     code_buf[code_size++] = (id_const >> 8) & 0xFF;
     code_buf[code_size++] = id_const & 0xFF;
 
-    if (job->type == NODE_TASK) {
+    if (job->type == NODE_TASK || job->type == NODE_EXPORT || job->type == NODE_TRANSFORM) {
       code_buf[code_size++] = OP_CALL_PROVIDER;
       code_buf[code_size++] = 0; code_buf[code_size++] = 0; code_buf[code_size++] = 0; code_buf[code_size++] = id_const;
     }

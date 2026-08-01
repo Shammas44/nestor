@@ -755,6 +755,28 @@ static int32_t compile_transform_spec(Arena *arena, JobNode *job, Jsonv_Value jo
   /*#endregion*/
 }
 
+static int32_t compile_export_spec(Arena *arena, JobNode *job, Jsonv_Value job_spec_val) {
+  /*#region*/
+  (void)arena;
+  Jsonv_Value v_spec;
+  if (!jsonv_obj_get(job_spec_val.as.p, "spec", &v_spec) || v_spec.tag != JSONV_VAL_OBJ) {
+    return ERR_MISSING_VAR;
+  }
+  Jsonv_Value v_file;
+  if (!jsonv_obj_get(v_spec.as.p, "file", &v_file) || v_file.tag != JSONV_VAL_STRING) {
+    return ERR_MISSING_VAR;
+  }
+  Jsonv_Value v_data;
+  if (!jsonv_obj_get(v_spec.as.p, "data", &v_data)) {
+    return ERR_MISSING_VAR;
+  }
+  job->spec.export_node.file_path.data = v_file.as.p;
+  job->spec.export_node.file_path.length = jsonv_val_str_len(v_file);
+  job->spec.export_node.data_val = v_data;
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
 static int32_t inject_implicit_dependencies(Arena *arena, JobNode **job_nodes, int job_count) {
   /*#region*/
   for (int i = 0; i < job_count; i++) {
@@ -1190,6 +1212,7 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
       else if (sv_equals_cstr(type_sv, "wait_signal")) type = NODE_WAIT_SIGNAL;
       else if (sv_equals_cstr(type_sv, "wait_timer")) type = NODE_WAIT_TIMER;
       else if (sv_equals_cstr(type_sv, "transform")) type = NODE_TRANSFORM;
+      else if (sv_equals_cstr(type_sv, "export")) type = NODE_EXPORT;
       else return ERR_MISSING_VAR; // Unknown node type
     }
     job->type = type;
@@ -1372,6 +1395,8 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
       spec_status = compile_wait_timer_spec(job, job_spec_val);
     } else if (job->type == NODE_TRANSFORM) {
       spec_status = compile_transform_spec(arena, job, job_spec_val);
+    } else if (job->type == NODE_EXPORT) {
+      spec_status = compile_export_spec(arena, job, job_spec_val);
     }
     if (spec_status != ERR_SUCCESS) {
       return spec_status;

@@ -18,7 +18,7 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "type": { "type": "string", "enum": ["task", "if", "switch", "fork", "join", "loop", "wait_signal", "wait_timer", "transform"] },
+          "type": { "type": "string", "enum": ["task", "if", "switch", "fork", "join", "loop", "wait_signal", "wait_timer", "transform", "export"] },
           "name": { "type": "string" },
           "depends_on": {
             "anyOf": [
@@ -134,6 +134,20 @@
           "chunk_record_limit": { "type": "integer" },
           "correlation_id": { "type": "string" },
           "duration": { "type": "string" },
+          "spec": {
+            "type": "object",
+            "properties": {
+              "expression": { "type": "string" },
+              "file": { "type": "string" },
+              "data": {
+                "anyOf": [
+                  { "type": "string" },
+                  { "type": "object" },
+                  { "type": "array" }
+                ]
+              }
+            }
+          },
           "start": { "type": "boolean" },
           "end": { "type": "boolean" },
           "return": {

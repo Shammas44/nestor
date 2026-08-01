@@ -37,7 +37,8 @@ typedef enum {
   NODE_LOOP,
   NODE_WAIT_SIGNAL,
   NODE_WAIT_TIMER,
-  NODE_TRANSFORM
+  NODE_TRANSFORM,
+  NODE_EXPORT
 } NodeType;
 
 typedef enum {
@@ -175,6 +176,11 @@ struct JobNode {
     struct {
       StringView expression;
     } transform;
+
+    struct {
+      StringView file_path;
+      Jsonv_Value data_val;
+    } export_node;
   } spec;
 };
 

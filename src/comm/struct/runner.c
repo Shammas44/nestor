@@ -2757,6 +2757,67 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
             store_job_in_cache(arena, ast, *context_val, job, NULL);
             control_flow_progress = true;
             break;
+          } else if (job->type == NODE_EXPORT) {
+            job->execution_state = STATE_RUNNING;
+
+            Jsonv_Value local_vars;
+            local_vars.tag = JSONV_VAL_OBJ;
+            local_vars.as.p = jsonv_obj_new(jsonv_arena, NULL);
+            push_local_vars(jsonv_arena, *context_val, local_vars);
+            evaluate_job_variables(arena, jsonv_arena, context_val, job, local_vars);
+
+            // 1. Evaluate file path
+            StringView resolved_file_path = {0};
+            int32_t status = resolve_string(arena, job->spec.export_node.file_path, jsonv_arena, *context_val, &resolved_file_path);
+            if (status != ERR_SUCCESS) {
+              pop_local_vars(jsonv_arena, *context_val, local_vars);
+              job->execution_state = STATE_FAILED;
+              ret_val = status;
+              goto cleanup;
+            }
+            char *file_path_cstr = allocate_jsonv_string(arena, resolved_file_path.data, resolved_file_path.length);
+
+            // 2. Evaluate data
+            Jsonv_Value data_res = resolve_json_value(arena, job->spec.export_node.data_val, jsonv_arena, *context_val);
+            if (data_res.tag == JSONV_VAL_UNDEFINED) {
+              pop_local_vars(jsonv_arena, *context_val, local_vars);
+              job->execution_state = STATE_FAILED;
+              ret_val = ERR_MISSING_VAR;
+              goto cleanup;
+            }
+
+            // 3. Serialize and write to file
+            char *serialized_data = NULL;
+            serialize_jsonv_value(arena, data_res, &serialized_data);
+            if (serialized_data && file_path_cstr) {
+              FILE *f = fopen(file_path_cstr, "w");
+              if (f) {
+                fputs(serialized_data, f);
+                fclose(f);
+              } else {
+                pop_local_vars(jsonv_arena, *context_val, local_vars);
+                job->execution_state = STATE_FAILED;
+                ret_val = ERR_HTTP_TRANSPORT;
+                goto cleanup;
+              }
+            }
+
+            // 4. Update outcome
+            char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+            Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
+            char *k_status = allocate_jsonv_string(arena, "status", 6);
+            jsonv_obj_set(jsonv_arena, job_outcome_obj, k_status, jsonv_val_str(allocate_jsonv_string(arena, "success", 7)));
+            
+            Jsonv_Value jobs_val_obj;
+            char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
+            if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+              jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+            }
+
+            pop_local_vars(jsonv_arena, *context_val, local_vars);
+            job->execution_state = STATE_SUCCEEDED;
+            control_flow_progress = true;
+            break;
           }
         }
         job = job->next_sorted;
@@ -2981,7 +3042,8 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
             active_jobs_head = aj;
           }
         } else if (job->type == NODE_IF || job->type == NODE_SWITCH || job->type == NODE_FORK ||
-                   job->type == NODE_JOIN || job->type == NODE_WAIT_SIGNAL || job->type == NODE_TRANSFORM) {
+                   job->type == NODE_JOIN || job->type == NODE_WAIT_SIGNAL || job->type == NODE_TRANSFORM ||
+                   job->type == NODE_EXPORT) {
           job = job->next_sorted;
           continue;
         } else {
