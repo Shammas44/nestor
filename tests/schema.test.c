@@ -2,7 +2,6 @@
 #include <jsonv/jsonv.h>
 #include "testutils.h"
 #include "arena.h"
-#include "error_codes.h"
 #include <criterion/criterion.h>
 
 static void *my_jsonv_arena_alloc(void *user_data, size_t size) {

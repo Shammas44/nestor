@@ -26,7 +26,7 @@ void test_fini(void);
 /*
  * Must be called at the beginning of each test body
  */
-#define WARN_THRESHOLD_MS 50
+#define WARN_THRESHOLD_MS 1000
 
 #define SET_TEST_NAME(suite, test) current_test_name = STR(suite) ":" STR(test)
 

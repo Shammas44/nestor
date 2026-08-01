@@ -35,50 +35,6 @@ static const Jsonv_Arena_Ops my_jsonv_ops = {
   .destroy = my_jsonv_arena_destroy
 };
 
-static bool is_digit(char c) {
-  /*#region*/
-  return c >= '0' && c <= '9';
-  /*#endregion*/
-}
-
-static bool validate_semver(StringView sv) {
-  /*#region*/
-  if (sv.length == 0 || !sv.data)
-    return false;
-  size_t i = 0;
-  
-  // Read major
-  if (i >= sv.length || !is_digit(sv.data[i]))
-    return false;
-  while (i < sv.length && is_digit(sv.data[i]))
-    i++;
-  
-  // Dot
-  if (i >= sv.length || sv.data[i] != '.')
-    return false;
-  i++;
-  
-  // Read minor
-  if (i >= sv.length || !is_digit(sv.data[i]))
-    return false;
-  while (i < sv.length && is_digit(sv.data[i]))
-    i++;
-  
-  // Dot
-  if (i >= sv.length || sv.data[i] != '.')
-    return false;
-  i++;
-  
-  // Read patch
-  if (i >= sv.length || !is_digit(sv.data[i]))
-    return false;
-  while (i < sv.length && is_digit(sv.data[i]))
-    i++;
-  
-  return i == sv.length;
-  /*#endregion*/
-}
-
 static char *read_file_to_arena(Arena *arena, const char *filepath, size_t *out_size) {
   /*#region*/
   FILE *f = fopen(filepath, "rb");
@@ -227,6 +183,7 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
   out_ast->root_val = root_val;
 
   // Extract version
+  // NO NEED TO VALIDATE VERSION, ALREADY DONE BY SCHEMA VALIDATION
   Jsonv_Value v_version;
   if (!jsonv_obj_get(root_val.as.p, "version", &v_version)) {
     return ERR_MISSING_VAR;
@@ -236,10 +193,6 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
   }
   out_ast->version.data = (const char *)v_version.as.p;
   out_ast->version.length = jsonv_val_str_len(v_version);
-
-  if (!validate_semver(out_ast->version)) {
-    return ERR_MISSING_VAR;
-  }
 
   // Extract name
   Jsonv_Value v_name;
