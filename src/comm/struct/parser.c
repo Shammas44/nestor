@@ -102,13 +102,13 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
   // Resolve external schema paths
   const char *schema_json_path = getenv("NESTOR_SCHEMA_PATH");
   if (!schema_json_path) {
-    schema_json_path = "specs/workflow_schema.json";
+    schema_json_path = "docs/workflow_schema.json";
     FILE *test_f = fopen(schema_json_path, "rb");
     if (!test_f) {
-      schema_json_path = "../specs/workflow_schema.json";
+      schema_json_path = "../docs/workflow_schema.json";
       test_f = fopen(schema_json_path, "rb");
       if (!test_f) {
-        schema_json_path = "../../specs/workflow_schema.json";
+        schema_json_path = "../../docs/workflow_schema.json";
         test_f = fopen(schema_json_path, "rb");
       }
     }
@@ -117,13 +117,13 @@ int32_t parser_parse_buffer(Arena *arena, const char *buffer, size_t len, Workfl
 
   const char *schema_bin_path = getenv("NESTOR_SCHEMA_BIN_PATH");
   if (!schema_bin_path) {
-    schema_bin_path = "specs/workflow_schema.bin";
+    schema_bin_path = "docs/workflow_schema.bin";
     FILE *test_f = fopen(schema_bin_path, "rb");
     if (!test_f) {
-      schema_bin_path = "../specs/workflow_schema.bin";
+      schema_bin_path = "../docs/workflow_schema.bin";
       test_f = fopen(schema_bin_path, "rb");
       if (!test_f) {
-        schema_bin_path = "../../specs/workflow_schema.bin";
+        schema_bin_path = "../../docs/workflow_schema.bin";
         test_f = fopen(schema_bin_path, "rb");
       }
     }

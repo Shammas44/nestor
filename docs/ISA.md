@@ -1,14 +1,10 @@
-# Specification: Nestor VM Instruction Set Architecture (ISA)
-
-- **Spec Identifier:** SPEC-ISA-001
-- **Status:** APPROVED
-- **Version:** 1.0.0
+# Nestor VM Instruction Set Architecture (ISA)
 
 ---
 
 ## 1. Virtual Machine Execution Model
 
-Nestor VM (NVM) is a **stack-based virtual machine**. It executes bytecode instructions sequentially or concurrently by operating on two primary stack structures and a data constant pool.
+Nestor VM (NVM) is a stack-based virtual machine. It executes bytecode instructions sequentially or concurrently by operating on two primary stack structures and a data constant pool.
 
 ### 1.1 Virtual Machine State
 The NVM execution context maintains the following register and state structures:
@@ -19,21 +15,21 @@ The NVM execution context maintains the following register and state structures:
 *   **Constant Pool**: A read-only lookup table of static strings and scalar values loaded from the bytecode header.
 
 ```
-                   NVM RUNTIME STATE
- ┌──────────────────────┐    ┌──────────────────────┐
- │      Call Stack      │    │   Evaluation Stack   │
- ├──────────────────────┤    ├──────────────────────┤
- │ Frame 2 (sub_wf)     │    │ [1]  "price_basic"   │ <── SP
- ├──────────────────────┤    ├──────────────────────┤
- │ Frame 1 (main_wf)    │    │ [0]  "stripe_id_12"  │
- └──────────┬───────────┘    └──────────────────────┘
-            │
-            ▼
- ┌──────────────────────┐    ┌──────────────────────┐
- │   Program Counter    │    │    Constant Pool     │
- ├──────────────────────┤    ├──────────────────────┤
- │ PC: 0x00A8           │    │ [0]  "id"            │
- └──────────────────────┘    └──────────────────────┘
+                    NVM RUNTIME STATE
+  ┌──────────────────────┐    ┌──────────────────────┐
+  │      Call Stack      │    │   Evaluation Stack   │
+  ├──────────────────────┤    ├──────────────────────┤
+  │ Frame 2 (sub_wf)     │    │ [1]  "price_basic"   │ <── SP
+  ├──────────────────────┤    ├──────────────────────┤
+  │ Frame 1 (main_wf)    │    │ [0]  "stripe_id_12"  │
+  └──────────┬───────────┘    └──────────────────────┘
+             │
+             ▼
+  ┌──────────────────────┐    ┌──────────────────────┐
+  │ Program Counter      │    │    Constant Pool     │
+  ├──────────────────────┤    ├──────────────────────┤
+  │ PC: 0x00A8           │    │ [0]  "id"            │
+  └──────────────────────┘    └──────────────────────┘
 ```
 
 ---
@@ -58,7 +54,7 @@ A compiled Nestor workflow is serialized as a contiguous binary file structured 
 ```c
 typedef struct {
   char magic[4];             // Must be "NEST"
-  uint16_t version;          // Target Nestor version (e.g., 3)
+  uint16_t version;          // Target Nestor version (e.g. 3)
   uint16_t flags;            // Flags (e.g. signing enabled)
   uint32_t const_pool_offset;// Offset to Constant Pool
   uint32_t const_pool_count; // Number of entries in Constant Pool
