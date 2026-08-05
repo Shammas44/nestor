@@ -69,13 +69,13 @@ bin/main apply output.nbc
 
 ## Detailed Documentation
 
-Complete design, architecture, and specifications are located in the [docs/](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs) folder:
+Complete design, architecture, and specifications are located in the [docs/](docs/) folder:
 
-*   **[OVERVIEW.md](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/OVERVIEW.md)**: Rationale, design philosophy, and core objectives.
-*   **[ARCHITECTURE.md](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/ARCHITECTURE.md)**: System design diagram, components, and zero-copy/arena decisions.
-*   **[FEATURES.md](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/FEATURES.md)**: Summary of job typologies, scoping, big data streaming, and caches.
-*   **[IMPLEMENTATION.md](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/IMPLEMENTATION.md)**: In-depth technical specifications of types, memory arenas, bridges, and scopes.
-*   **[ISA.md](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/ISA.md)**: Detailed NVM Instruction Set Architecture and binary bytecode formats.
-*   **[USAGE.md](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/USAGE.md)**: Formal scenario configuration guide, steps parameters, variables, and examples.
-*   **[ROADMAP.md](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/ROADMAP.md)**: Sequential slices and technical phases of the project.
-*   **[PROGRESS.md](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/PROGRESS.md)**: Current completion checklist for all developmental stages.
+*   **[OVERVIEW.md](docs/OVERVIEW.md)**: Rationale, design philosophy, and core objectives.
+*   **[ARCHITECTURE.md](docs/ARCHITECTURE.md)**: System design diagram, components, and zero-copy/arena decisions.
+*   **[FEATURES.md](docs/FEATURES.md)**: Summary of job typologies, scoping, big data streaming, and caches.
+*   **[IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**: In-depth technical specifications of types, memory arenas, bridges, and scopes.
+*   **[ISA.md](docs/ISA.md)**: Detailed NVM Instruction Set Architecture and binary bytecode formats.
+*   **[USAGE.md](docs/USAGE.md)**: Formal scenario configuration guide, steps parameters, variables, and examples.
+*   **[ROADMAP.md](docs/ROADMAP.md)**: Sequential slices and technical phases of the project.
+*   **[PROGRESS.md](docs/PROGRESS.md)**: Current completion checklist for all developmental stages.

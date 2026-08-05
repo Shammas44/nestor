@@ -1,6 +1,6 @@
 # Nestor Integration Runtime: Implementation Progress
 
-This document tracks the current completion status of stages outlined in the [ROADMAP.md](file:///Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/ROADMAP.md).
+This document tracks the current completion status of stages outlined in the [ROADMAP.md](ROADMAP.md).
 
 ---
 
