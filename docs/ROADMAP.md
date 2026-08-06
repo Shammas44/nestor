@@ -33,9 +33,19 @@ Phase 1 focuses on building the core C execution engine, memory systems, express
 ### Phase 1 compilation & VM Targets
 *   **Stage 9: Provider SDK & C SPI**: Standard API boundaries to load dynamic libraries (`.so`/`.dylib`) as providers.
 *   **Stage 9.5: Multi-File Workspace Loader**: Recursive folder scanning, compiling workspaces dynamically.
-*   **Stage 10: Canonical Type Mapping**: Zero-copy transcoder converting external streams, databases, and formats to JSON.
-*   **Stage 10.5: Nested Sub-Workflows**: Execution frames allowing recursive nested scenarios.
-*   **Stage 11: Static Schema Verification**: Pre-flight contract type validation and dry-runs (`plan`).
+*   **Stage 10: Multi-Format Transcoder & JSON-IR**:
+    *   **Stage 10.1: CSV/TSV Transcoder**: Zero-copy RFC 4180 CSV parser producing `Jsonv_Value` arrays. Configurable delimiter, header mode, and quote relaxation.
+    *   **Stage 10.2: XML Transcoder**: SAX-like single-pass XML scanner with three conversion conventions (Parker, BadgerFish, JsonML).
+    *   **Stage 10.3: URL-Encoded Form Transcoder**: `application/x-www-form-urlencoded` parser and serializer for OAuth2 and webhook payloads.
+    *   **Stage 10.4: Binary Encoding**: Base64 and hex encode/decode functions operating on arena `StringView` buffers.
+    *   **Stage 10.5: YAML Transcoder**: Parse YAML data payloads (distinct from workflow loader) into `Jsonv_Value`.
+    *   **Stage 10.6: Output Formatters**: Reverse serializers (`$csvFormat`, `$xmlFormat`, `$formEncode`, `$binaryEncode`) converting `Jsonv_Value` back to target format strings.
+    *   **Stage 10.7: JSONata Function Registration**: Register all transcoder functions (`$csvParse`, `$xmlParse`, `$formParse`, `$binaryDecode`, `$yamlParse`, and their output counterparts) in the evaluation environment.
+*   **Stage 10.8: Nested Sub-Workflows**: Execution frames allowing recursive nested scenarios.
+*   **Stage 11: Static Schema Verification & Context Inspection**:
+    *   **Stage 11.1: Context Inspection (`plan --show-context`)**: Dry-run workflows with mock payloads, printing the transcoded JSON context tree.
+    *   **Stage 11.2: Sample Anchoring (`schema_sample`)**: Compile-time validation of downstream expressions against transcoded sample files.
+    *   **Stage 11.3: Contract Type Validation**: Pre-flight type checks and dry-runs (`plan`).
 *   **Stage 11.5: Bytecode Compiler**: Serializing AST scenarios to binary bytecode (`.nbc`).
 *   **Stage 11.7: Nestor VM (NVM)**: Mapped zero-parsing VM interpreter (`apply`) running instructions.
 

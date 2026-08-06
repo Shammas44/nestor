@@ -206,3 +206,91 @@ All routines return signed `int32_t` status codes:
 *   `ERR_HTTP_TRANSPORT` (`-6`): Request timed out or failed to connect.
 *   `ERR_INVALID_BOUNDARY` (`-7`): Start/end graph boundary violations.
 *   `ERR_LOCKED` (`-8`): State backend lock file active.
+*   `ERR_TRANSCODE` (`-9`): Data format transcoding failed (malformed CSV, invalid XML, unsupported encoding).
+
+---
+
+## 8. Multi-Format Transcoder Module
+
+### 8.1 Architecture: JSON as Unified IR
+
+Nestor uses `Jsonv_Value` (the arena-allocated JSON DOM) as its **Unified Intermediate Representation**. Rather than building separate C type hierarchies for each data format, all non-JSON inputs are transcoded into `Jsonv_Value` structures at the expression evaluation boundary, and formatted back to the target encoding only at output boundaries.
+
+```
+ Raw String (CSV/XML/Binary)
+       │
+       ▼
+ ┌─────────────────────────┐
+ │  Transcoder (Input)     │  $csvParse(), $xmlParse(), ...
+ │  Arena-allocated parse  │
+ └──────────┬──────────────┘
+            │ Jsonv_Value
+            ▼
+ ┌─────────────────────────┐
+ │  Core Engine            │  JSONata evaluator, DAG runner, NVM
+ │  (operates on JSON IR)  │
+ └──────────┬──────────────┘
+            │ Jsonv_Value
+            ▼
+ ┌─────────────────────────┐
+ │  Formatter (Output)     │  $csvFormat(), $xmlFormat(), ...
+ │  Serialize to string    │
+ └─────────────────────────┘
+```
+
+**Rationale**: This approach avoids VM instruction bloat (no new opcodes), preserves JSONata compatibility (one query language for all formats), and keeps the zero-copy arena memory model intact.
+
+### 8.2 Input Transcoders
+
+All transcoders accept an `Arena*` parameter and produce `Jsonv_Value` results without heap allocation.
+
+#### `csv_to_json(Arena* arena, StringView data, CsvOptions opts)` → `Jsonv_Value`
+*   Scans line-by-line using pointer arithmetic over the original buffer (zero-copy for unquoted fields).
+*   If `opts.header == true`: extracts the first line as `StringView` keys, produces `JSONV_VAL_ARRAY` of `JSONV_VAL_OBJ`.
+*   If `opts.header == false`: produces `JSONV_VAL_ARRAY` of `JSONV_VAL_ARRAY`.
+*   Handles RFC 4180 quoted fields (double-quote escaping) by copying only quoted cells into arena memory.
+*   Supports configurable delimiter (`','`, `';'`, `'\t'`) and relaxed parsing mode (tolerating ragged rows).
+
+#### `xml_to_json(Arena* arena, StringView data, XmlConvention conv)` → `Jsonv_Value`
+*   Implements a SAX-like single-pass scanner tracking element nesting depth via the existing `BitStack`.
+*   Produces `Jsonv_Value` trees according to the selected convention:
+    *   `XML_PARKER`: Direct tag-to-key mapping. Single children become values; repeated siblings fold into arrays.
+    *   `XML_BADGERFISH`: Attributes stored with `@` prefix, text content under `$` key.
+    *   `XML_JSONML`: Preserves document order using nested arrays (`["tag", {"@attr": "val"}, ...children]`).
+*   Does not support XML namespaces or DTD validation (out of scope for an integration runtime).
+
+#### `form_to_json(Arena* arena, StringView data)` → `Jsonv_Value`
+*   Parses `application/x-www-form-urlencoded` key-value pairs into a flat `JSONV_VAL_OBJ`.
+*   Handles percent-decoding (`%20` → space) and `+` substitution in-place on arena-copied segments.
+
+#### `binary_decode(Arena* arena, StringView data, BinaryEncoding enc)` → `Jsonv_Value`
+*   Decodes `base64` or `hex` encoded strings into raw byte `StringView` values stored in the arena.
+*   Returns a `JSONV_VAL_STRING` containing the decoded bytes.
+
+### 8.3 Output Formatters
+
+Formatters serialize `Jsonv_Value` back into target format strings for export jobs, HTTP request bodies, or plugin outputs.
+
+*   **`json_to_csv(Arena* arena, Jsonv_Value val, CsvOptions opts)`** → `StringView`: Extracts unique keys from the first object in the array to write headers, then iterates row objects to write delimited values.
+*   **`json_to_xml(Arena* arena, Jsonv_Value val, XmlConvention conv)`** → `StringView`: Reconstructs XML element trees from JSON objects, respecting the convention used during parsing.
+*   **`json_to_form(Arena* arena, Jsonv_Value val)`** → `StringView`: Serializes flat objects to `key=value&key2=value2` with percent-encoding.
+*   **`binary_encode(Arena* arena, StringView data, BinaryEncoding enc)`** → `StringView`: Encodes raw bytes to base64 or hex strings.
+
+### 8.4 JSONata Function Registration
+
+Transcoders are exposed to the user as custom JSONata functions registered in the evaluation environment (`evaluator.c`):
+
+| JSONata Function | C Implementation | Description |
+| :--- | :--- | :--- |
+| `$csvParse(str, opts?)` | `csv_to_json()` | Parse CSV/TSV string to JSON array |
+| `$csvFormat(val, opts?)` | `json_to_csv()` | Serialize JSON array to CSV string |
+| `$xmlParse(str, convention?)` | `xml_to_json()` | Parse XML string to JSON tree |
+| `$xmlFormat(val, convention?)` | `json_to_xml()` | Serialize JSON tree to XML string |
+| `$formParse(str)` | `form_to_json()` | Parse URL-encoded string to JSON object |
+| `$formEncode(val)` | `json_to_form()` | Serialize JSON object to URL-encoded string |
+| `$binaryDecode(str, encoding)` | `binary_decode()` | Decode base64/hex string to raw bytes |
+| `$binaryEncode(str, encoding)` | `binary_encode()` | Encode raw bytes to base64/hex string |
+| `$yamlParse(str)` | `yaml_to_json()` | Parse YAML string to JSON value |
+
+Functions are registered via the existing `jsonata_register_function()` C bridge, receiving the active `Arena*` as their allocation context. Return values are `Jsonv_Value` pointers that integrate seamlessly with the rest of the expression evaluation pipeline.
+
