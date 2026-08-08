@@ -10,5 +10,6 @@
 #define ERR_HTTP_TRANSPORT -6
 #define ERR_INVALID_BOUNDARY -7
 #define ERR_LOCKED -8
+#define ERR_TRANSCODE -9
 
 #endif

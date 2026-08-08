@@ -327,6 +327,277 @@ static Jsonv_Value convert_jsonata_to_jsonv(Arena *our_arena, Jsonv_Arena *jsonv
   /*#endregion*/
 }
 
+#include "types.h"
+
+static _Thread_local Arena *g_nestor_arena = NULL;
+static _Thread_local Jsonv_Arena *g_nestor_jarena = NULL;
+
+static CsvOptions unpack_csv_options(Jsonata_Value *opts_val) {
+  /*#region*/
+  CsvOptions opts = { .header = true, .delimiter = ',', .relaxed = false };
+  if (opts_val && opts_val->type == JSONATA_VAL_OBJECT) {
+    for (size_t i = 0; i < opts_val->u.obj.count; i++) {
+      Jsonata_Member *m = &opts_val->u.obj.members[i];
+      if (m->key.len == 6 && strncmp(m->key.ptr, "header", 6) == 0) {
+        if (m->value->type == JSONATA_VAL_BOOL) opts.header = m->value->u.b;
+      } else if (m->key.len == 9 && strncmp(m->key.ptr, "delimiter", 9) == 0) {
+        if (m->value->type == JSONATA_VAL_STRING && m->value->u.s.len > 0) {
+          opts.delimiter = m->value->u.s.ptr[0];
+        }
+      } else if (m->key.len == 7 && strncmp(m->key.ptr, "relaxed", 7) == 0) {
+        if (m->value->type == JSONATA_VAL_BOOL) opts.relaxed = m->value->u.b;
+      }
+    }
+  }
+  return opts;
+  /*#endregion*/
+}
+
+static XmlConvention unpack_xml_convention(Jsonata_Value *conv_val) {
+  /*#region*/
+  XmlConvention conv = XML_PARKER;
+  if (conv_val && conv_val->type == JSONATA_VAL_STRING) {
+    if (conv_val->u.s.len == 10 && strncmp(conv_val->u.s.ptr, "badgerfish", 10) == 0) {
+      conv = XML_BADGERFISH;
+    } else if (conv_val->u.s.len == 6 && strncmp(conv_val->u.s.ptr, "jsonml", 6) == 0) {
+      conv = XML_JSONML;
+    }
+  }
+  return conv;
+  /*#endregion*/
+}
+
+static BinaryEncoding unpack_binary_encoding(Jsonata_Value *enc_val) {
+  /*#region*/
+  BinaryEncoding enc = BINARY_BASE64;
+  if (enc_val && enc_val->type == JSONATA_VAL_STRING) {
+    if (enc_val->u.s.len == 3 && strncmp(enc_val->u.s.ptr, "hex", 3) == 0) {
+      enc = BINARY_HEX;
+    }
+  }
+  return enc;
+  /*#endregion*/
+}
+
+static Jsonata_Value *csvParse_wrapper(Jsonata_Value **args, size_t arg_count, struct Jsonata_Env *env, Jsonata_Arena *arena, Jsonata_Error *err) {
+  /*#region*/
+  (void)env;
+  if (arg_count < 1 || args[0]->type != JSONATA_VAL_STRING) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  StringView csv_data = { args[0]->u.s.ptr, args[0]->u.s.len };
+  CsvOptions opts = { .header = true, .delimiter = ',', .relaxed = false };
+  if (arg_count >= 2) {
+    opts = unpack_csv_options(args[1]);
+  }
+  Jsonv_Value out_val = jsonv_val_undefined();
+  int32_t status = csv_to_json(g_nestor_arena, g_nestor_jarena, csv_data, opts, &out_val);
+  if (status != ERR_SUCCESS) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  return convert_jsonv_to_jsonata_impl(arena, out_val, 0);
+  /*#endregion*/
+}
+
+static Jsonata_Value *csvFormat_wrapper(Jsonata_Value **args, size_t arg_count, struct Jsonata_Env *env, Jsonata_Arena *arena, Jsonata_Error *err) {
+  /*#region*/
+  (void)env;
+  if (arg_count < 1) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  Jsonv_Value val = convert_jsonata_to_jsonv(g_nestor_arena, g_nestor_jarena, args[0]);
+  CsvOptions opts = { .header = true, .delimiter = ',', .relaxed = false };
+  if (arg_count >= 2) {
+    opts = unpack_csv_options(args[1]);
+  }
+  StringView out_sv = { NULL, 0 };
+  int32_t status = json_to_csv(g_nestor_arena, val, opts, &out_sv);
+  if (status != ERR_SUCCESS) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  Jsonata_Value *res = jsonata_value_alloc(arena);
+  if (!res) return NULL;
+  res->type = JSONATA_VAL_STRING;
+  res->u.s.ptr = out_sv.data;
+  res->u.s.len = out_sv.length;
+  return res;
+  /*#endregion*/
+}
+
+static Jsonata_Value *xmlParse_wrapper(Jsonata_Value **args, size_t arg_count, struct Jsonata_Env *env, Jsonata_Arena *arena, Jsonata_Error *err) {
+  /*#region*/
+  (void)env;
+  if (arg_count < 1 || args[0]->type != JSONATA_VAL_STRING) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  StringView xml_data = { args[0]->u.s.ptr, args[0]->u.s.len };
+  XmlConvention conv = XML_PARKER;
+  if (arg_count >= 2) {
+    conv = unpack_xml_convention(args[1]);
+  }
+  Jsonv_Value out_val = jsonv_val_undefined();
+  int32_t status = xml_to_json(g_nestor_arena, g_nestor_jarena, xml_data, conv, &out_val);
+  if (status != ERR_SUCCESS) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  return convert_jsonv_to_jsonata_impl(arena, out_val, 0);
+  /*#endregion*/
+}
+
+static Jsonata_Value *xmlFormat_wrapper(Jsonata_Value **args, size_t arg_count, struct Jsonata_Env *env, Jsonata_Arena *arena, Jsonata_Error *err) {
+  /*#region*/
+  (void)env;
+  if (arg_count < 1) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  Jsonv_Value val = convert_jsonata_to_jsonv(g_nestor_arena, g_nestor_jarena, args[0]);
+  XmlConvention conv = XML_PARKER;
+  if (arg_count >= 2) {
+    conv = unpack_xml_convention(args[1]);
+  }
+  StringView out_sv = { NULL, 0 };
+  int32_t status = json_to_xml(g_nestor_arena, val, conv, &out_sv);
+  if (status != ERR_SUCCESS) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  Jsonata_Value *res = jsonata_value_alloc(arena);
+  if (!res) return NULL;
+  res->type = JSONATA_VAL_STRING;
+  res->u.s.ptr = out_sv.data;
+  res->u.s.len = out_sv.length;
+  return res;
+  /*#endregion*/
+}
+
+static Jsonata_Value *formParse_wrapper(Jsonata_Value **args, size_t arg_count, struct Jsonata_Env *env, Jsonata_Arena *arena, Jsonata_Error *err) {
+  /*#region*/
+  (void)env;
+  if (arg_count < 1 || args[0]->type != JSONATA_VAL_STRING) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  StringView form_data = { args[0]->u.s.ptr, args[0]->u.s.len };
+  Jsonv_Value out_val = jsonv_val_undefined();
+  int32_t status = form_to_json(g_nestor_arena, g_nestor_jarena, form_data, &out_val);
+  if (status != ERR_SUCCESS) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  return convert_jsonv_to_jsonata_impl(arena, out_val, 0);
+  /*#endregion*/
+}
+
+static Jsonata_Value *formEncode_wrapper(Jsonata_Value **args, size_t arg_count, struct Jsonata_Env *env, Jsonata_Arena *arena, Jsonata_Error *err) {
+  /*#region*/
+  (void)env;
+  if (arg_count < 1) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  Jsonv_Value val = convert_jsonata_to_jsonv(g_nestor_arena, g_nestor_jarena, args[0]);
+  StringView out_sv = { NULL, 0 };
+  int32_t status = json_to_form(g_nestor_arena, val, &out_sv);
+  if (status != ERR_SUCCESS) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  Jsonata_Value *res = jsonata_value_alloc(arena);
+  if (!res) return NULL;
+  res->type = JSONATA_VAL_STRING;
+  res->u.s.ptr = out_sv.data;
+  res->u.s.len = out_sv.length;
+  return res;
+  /*#endregion*/
+}
+
+static Jsonata_Value *binaryDecode_wrapper(Jsonata_Value **args, size_t arg_count, struct Jsonata_Env *env, Jsonata_Arena *arena, Jsonata_Error *err) {
+  /*#region*/
+  (void)env;
+  if (arg_count < 2 || args[0]->type != JSONATA_VAL_STRING || args[1]->type != JSONATA_VAL_STRING) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  StringView data = { args[0]->u.s.ptr, args[0]->u.s.len };
+  BinaryEncoding enc = unpack_binary_encoding(args[1]);
+  Jsonv_Value out_val = jsonv_val_undefined();
+  int32_t status = binary_decode(g_nestor_arena, g_nestor_jarena, data, enc, &out_val);
+  if (status != ERR_SUCCESS) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  return convert_jsonv_to_jsonata_impl(arena, out_val, 0);
+  /*#endregion*/
+}
+
+static Jsonata_Value *binaryEncode_wrapper(Jsonata_Value **args, size_t arg_count, struct Jsonata_Env *env, Jsonata_Arena *arena, Jsonata_Error *err) {
+  /*#region*/
+  (void)env;
+  if (arg_count < 2 || args[0]->type != JSONATA_VAL_STRING || args[1]->type != JSONATA_VAL_STRING) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  StringView data = { args[0]->u.s.ptr, args[0]->u.s.len };
+  BinaryEncoding enc = unpack_binary_encoding(args[1]);
+  StringView out_sv = { NULL, 0 };
+  int32_t status = binary_encode(g_nestor_arena, data, enc, &out_sv);
+  if (status != ERR_SUCCESS) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  Jsonata_Value *res = jsonata_value_alloc(arena);
+  if (!res) return NULL;
+  res->type = JSONATA_VAL_STRING;
+  res->u.s.ptr = out_sv.data;
+  res->u.s.len = out_sv.length;
+  return res;
+  /*#endregion*/
+}
+
+static Jsonata_Value *yamlParse_wrapper(Jsonata_Value **args, size_t arg_count, struct Jsonata_Env *env, Jsonata_Arena *arena, Jsonata_Error *err) {
+  /*#region*/
+  (void)env;
+  if (arg_count < 1 || args[0]->type != JSONATA_VAL_STRING) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  StringView yaml_data = { args[0]->u.s.ptr, args[0]->u.s.len };
+  Jsonv_Value out_val = jsonv_val_undefined();
+  int32_t status = yaml_to_json(g_nestor_arena, g_nestor_jarena, yaml_data, &out_val);
+  if (status != ERR_SUCCESS) {
+    err->type = Jsonata_Type_error;
+    return NULL;
+  }
+  return convert_jsonv_to_jsonata_impl(arena, out_val, 0);
+  /*#endregion*/
+}
+
+static void register_custom_jsonata_functions(void) {
+  /*#region*/
+  static bool registered = false;
+  if (registered) return;
+  
+  jsonata_register_function("csvParse", csvParse_wrapper);
+  jsonata_register_function("csvFormat", csvFormat_wrapper);
+  jsonata_register_function("xmlParse", xmlParse_wrapper);
+  jsonata_register_function("xmlFormat", xmlFormat_wrapper);
+  jsonata_register_function("formParse", formParse_wrapper);
+  jsonata_register_function("formEncode", formEncode_wrapper);
+  jsonata_register_function("binaryDecode", binaryDecode_wrapper);
+  jsonata_register_function("binaryEncode", binaryEncode_wrapper);
+  jsonata_register_function("yamlParse", yamlParse_wrapper);
+  
+  registered = true;
+  /*#endregion*/
+}
+
 Jsonata_Arena *nestor_jsonata_arena_new(Arena *arena) {
   /*#region*/
   return jsonata_arena_new_custom(&my_jsonata_ops, arena);
@@ -337,6 +608,10 @@ int32_t evaluate_expression(Arena *arena, StringView expr, Jsonv_Arena *jsonv_ar
   /*#region*/
   if (!arena || !jsonv_arena || !out_val)
     return ERR_OOM;
+
+  g_nestor_arena = arena;
+  g_nestor_jarena = jsonv_arena;
+  register_custom_jsonata_functions();
 
   // Create JSONata arena via our custom allocator operations mapping directly into our Arena
   Jsonata_Arena *jsonata_arena = jsonata_arena_new_custom(&my_jsonata_ops, arena);

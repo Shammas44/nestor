@@ -115,6 +115,7 @@
                   "additionalProperties": { "type": "string" }
                 },
                 "provider": { "type": "string" },
+                "schema_sample": { "type": "string" },
                 "args": { "type": "object" },
                 "on_error": {
                   "type": "object",

@@ -1,6 +1,8 @@
 #include "compiler.h"
 #include <string.h>
 #include "evaluator.h"
+#include "types.h"
+#include <stdio.h>
 
 void *na_alloc(Arena *arena, size_t size);
 
@@ -266,6 +268,12 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
   if (jsonv_obj_get(step_val.as.p, "id", &step_id_val) && step_id_val.tag == JSONV_VAL_STRING) {
     step->id.data = step_id_val.as.p;
     step->id.length = jsonv_val_str_len(step_id_val);
+  }
+
+  Jsonv_Value step_sample_val;
+  if (jsonv_obj_get(step_val.as.p, "schema_sample", &step_sample_val) && step_sample_val.tag == JSONV_VAL_STRING) {
+    step->schema_sample.data = step_sample_val.as.p;
+    step->schema_sample.length = jsonv_val_str_len(step_sample_val);
   }
 
   Jsonv_Value step_http;
@@ -1037,6 +1045,320 @@ static int32_t compile_providers(Arena *arena, Jsonv_Value providers_val, Provid
 }
 
 
+static char *allocate_jsonv_string(Arena *arena, const char *str, size_t len) {
+  /*#region*/
+  char *buf = na_alloc(arena, len + sizeof(uint32_t) + 1);
+  if (!buf) return NULL;
+  *(uint32_t *)buf = (uint32_t)len;
+  char *str_ptr = buf + sizeof(uint32_t);
+  memcpy(str_ptr, str, len);
+  str_ptr[len] = '\0';
+  return str_ptr;
+  /*#endregion*/
+}
+
+static char *allocate_jsonv_string_cstr(Arena *arena, const char *str) {
+  /*#region*/
+  return allocate_jsonv_string(arena, str, strlen(str));
+  /*#endregion*/
+}
+
+static char *read_sample_file(Arena *arena, const char *path, size_t *out_size) {
+  /*#region*/
+  FILE *f = fopen(path, "rb");
+  if (!f) return NULL;
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  if (size < 0) {
+    fclose(f);
+    return NULL;
+  }
+  char *buf = na_alloc(arena, size + 1);
+  if (!buf) {
+    fclose(f);
+    return NULL;
+  }
+  size_t read_bytes = fread(buf, 1, size, f);
+  buf[read_bytes] = '\0';
+  fclose(f);
+  if (out_size) *out_size = read_bytes;
+  return buf;
+  /*#endregion*/
+}
+
+static bool expression_references_step_without_sample(WorkflowAST *ast, StringView expr) {
+  /*#region*/
+  JobNode *job = ast->jobs_head;
+  while (job) {
+    if (job->type == NODE_TASK) {
+      StepNode *step = job->spec.task.steps_head;
+      while (step) {
+        if (step->schema_sample.length == 0) {
+          const char *id_ptr = step->id.data;
+          size_t id_len = step->id.length;
+          for (size_t i = 0; i <= expr.length - id_len; i++) {
+            if (strncmp(expr.data + i, id_ptr, id_len) == 0) {
+              bool before_ok = (i == 0 || !is_ident_char(expr.data[i - 1]));
+              bool after_ok = (i + id_len == expr.length || !is_ident_char(expr.data[i + id_len]));
+              if (before_ok && after_ok) {
+                return true;
+              }
+            }
+          }
+        }
+        step = step->next;
+      }
+    }
+    job = job->next_sorted;
+  }
+  return false;
+  /*#endregion*/
+}
+
+static bool expression_references_unsampled_dependency(WorkflowAST *ast, StringView expr) {
+  /*#region*/
+  if (expression_references_step_without_sample(ast, expr)) {
+    return true;
+  }
+  VariableAST *gv = ast->variables_head;
+  while (gv) {
+    if (expression_references_var(expr, gv->name)) {
+      if (expression_references_step_without_sample(ast, gv->expression)) {
+        return true;
+      }
+    }
+    gv = gv->next;
+  }
+  JobNode *job = ast->jobs_head;
+  while (job) {
+    VariableAST *jv = job->variables_head;
+    while (jv) {
+      if (expression_references_var(expr, jv->name)) {
+        if (expression_references_step_without_sample(ast, jv->expression)) {
+          return true;
+        }
+      }
+      jv = jv->next;
+    }
+    job = job->next_sorted;
+  }
+  return false;
+  /*#endregion*/
+}
+
+static int32_t validate_string_expressions(Arena *arena, Jsonv_Arena *jarena, StringView sv, Jsonv_Value context_val, WorkflowAST *ast) {
+  /*#region*/
+  const char *ptr = sv.data;
+  size_t len = sv.length;
+  while (len > 0) {
+    const char *start = strstr(ptr, "${{");
+    if (!start || (size_t)(start - ptr) >= len) break;
+    const char *end = strstr(start + 3, "}}");
+    if (!end || (size_t)(end - start) >= len) break;
+    
+    size_t expr_len = end - (start + 3);
+    StringView expr_sv = { start + 3, expr_len };
+    
+    Jsonv_Value val = jsonv_val_undefined();
+    int32_t status = evaluate_expression(arena, expr_sv, jarena, context_val, &val);
+    if (status != ERR_SUCCESS || val.tag == JSONV_VAL_UNDEFINED) {
+      if (expression_references_unsampled_dependency(ast, expr_sv)) {
+        // Ignored
+      } else {
+        fprintf(stderr, "Compile-time Validation Error: Downstream expression '%.*s' is invalid or references nonexistent path\n",
+                (int)expr_len, start + 3);
+        return ERR_MISSING_VAR;
+      }
+    }
+    
+    len -= (end + 2 - ptr);
+    ptr = end + 2;
+  }
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
+static int32_t validate_workflow_expressions(Arena *arena, WorkflowAST *ast) {
+  /*#region*/
+  Jsonv_Arena *jarena = jsonv_ctx_arena(ast->jsonv_ctx);
+  if (!jarena) return ERR_SUCCESS;
+
+  Jsonv_Obj *root_obj = jsonv_obj_new(jarena, NULL);
+  if (!root_obj) return ERR_OOM;
+
+  Jsonv_Obj *inputs_obj = jsonv_obj_new(jarena, NULL);
+  jsonv_obj_set(jarena, root_obj, allocate_jsonv_string_cstr(arena, "inputs"), jsonv_val_obj(inputs_obj));
+  Jsonv_Obj *secrets_obj = jsonv_obj_new(jarena, NULL);
+  jsonv_obj_set(jarena, root_obj, allocate_jsonv_string_cstr(arena, "secrets"), jsonv_val_obj(secrets_obj));
+  Jsonv_Obj *env_obj = jsonv_obj_new(jarena, NULL);
+  jsonv_obj_set(jarena, root_obj, allocate_jsonv_string_cstr(arena, "env"), jsonv_val_obj(env_obj));
+
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  // Evaluate global variables
+  VariableAST *gv = ast->variables_head;
+  while (gv) {
+    Jsonv_Value val = jsonv_val_undefined();
+    int32_t status = evaluate_expression(arena, gv->expression, jarena, context_val, &val);
+    if (status == ERR_SUCCESS && val.tag != JSONV_VAL_UNDEFINED) {
+      char *var_name = allocate_jsonv_string(arena, gv->name.data, gv->name.length);
+      jsonv_obj_set(jarena, root_obj, var_name, val);
+    }
+    gv = gv->next;
+  }
+
+  // Traverse sorted jobs
+  JobNode *job = ast->jobs_head;
+  while (job) {
+    // Evaluate job variables
+    VariableAST *jv = job->variables_head;
+    while (jv) {
+      Jsonv_Value val = jsonv_val_undefined();
+      int32_t status = evaluate_expression(arena, jv->expression, jarena, context_val, &val);
+      if (status == ERR_SUCCESS && val.tag != JSONV_VAL_UNDEFINED) {
+        Jsonv_Value jobs_val;
+        char *jobs_key = allocate_jsonv_string_cstr(arena, "jobs");
+        if (!jsonv_obj_get(root_obj, jobs_key, &jobs_val)) {
+          Jsonv_Obj *jobs_obj = jsonv_obj_new(jarena, NULL);
+          jobs_val = jsonv_val_obj(jobs_obj);
+          jsonv_obj_set(jarena, root_obj, jobs_key, jobs_val);
+        }
+        Jsonv_Value job_val;
+        char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+        if (!jsonv_obj_get(jobs_val.as.p, job_id_cstr, &job_val)) {
+          Jsonv_Obj *job_obj = jsonv_obj_new(jarena, NULL);
+          job_val = jsonv_val_obj(job_obj);
+          jsonv_obj_set(jarena, jobs_val.as.p, job_id_cstr, job_val);
+        }
+        Jsonv_Value j_outputs_val;
+        char *outputs_key = allocate_jsonv_string_cstr(arena, "outputs");
+        if (!jsonv_obj_get(job_val.as.p, outputs_key, &j_outputs_val)) {
+          Jsonv_Obj *j_outputs_obj = jsonv_obj_new(jarena, NULL);
+          j_outputs_val = jsonv_val_obj(j_outputs_obj);
+          jsonv_obj_set(jarena, job_val.as.p, outputs_key, j_outputs_val);
+        }
+        char *var_name = allocate_jsonv_string(arena, jv->name.data, jv->name.length);
+        jsonv_obj_set(jarena, j_outputs_val.as.p, var_name, val);
+      }
+      jv = jv->next;
+    }
+
+    if (job->type == NODE_TASK) {
+      StepNode *step = job->spec.task.steps_head;
+      while (step) {
+        if (step->schema_sample.length > 0) {
+          char filepath[512];
+          snprintf(filepath, sizeof(filepath), "%.*s", (int)step->schema_sample.length, step->schema_sample.data);
+          size_t size = 0;
+          char *content = read_sample_file(arena, filepath, &size);
+          if (!content) {
+            fprintf(stderr, "Compile-time Validation Error: Could not open sample file '%s'\n", filepath);
+            return ERR_MISSING_VAR;
+          }
+          int format = 0;
+          if (strstr(filepath, ".json")) format = 1;
+          else if (strstr(filepath, ".xml")) format = 2;
+          else if (strstr(filepath, ".csv")) format = 3;
+          else if (strstr(filepath, ".yaml") || strstr(filepath, ".yml")) format = 4;
+
+          Jsonv_Value transcoded = jsonv_val_undefined();
+          int32_t status = -1;
+          if (format == 1) status = yaml_to_json(arena, jarena, (StringView){content, size}, &transcoded);
+          else if (format == 2) status = xml_to_json(arena, jarena, (StringView){content, size}, XML_PARKER, &transcoded);
+          else if (format == 3) status = csv_to_json(arena, jarena, (StringView){content, size}, (CsvOptions){.header=true, .delimiter=','}, &transcoded);
+          else if (format == 4) status = yaml_to_json(arena, jarena, (StringView){content, size}, &transcoded);
+
+          if (status != ERR_SUCCESS) {
+            fprintf(stderr, "Compile-time Validation Error: Failed to transcode sample file '%s'\n", filepath);
+            return ERR_MISSING_VAR;
+          }
+
+          Jsonv_Value jobs_val;
+          char *jobs_key = allocate_jsonv_string_cstr(arena, "jobs");
+          if (!jsonv_obj_get(root_obj, jobs_key, &jobs_val)) {
+            Jsonv_Obj *jobs_obj = jsonv_obj_new(jarena, NULL);
+            jobs_val = jsonv_val_obj(jobs_obj);
+            jsonv_obj_set(jarena, root_obj, jobs_key, jobs_val);
+          }
+          Jsonv_Value job_val;
+          char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
+          if (!jsonv_obj_get(jobs_val.as.p, job_id_cstr, &job_val)) {
+            Jsonv_Obj *job_obj = jsonv_obj_new(jarena, NULL);
+            job_val = jsonv_val_obj(job_obj);
+            jsonv_obj_set(jarena, jobs_val.as.p, job_id_cstr, job_val);
+          }
+          Jsonv_Value steps_val;
+          char *steps_key = allocate_jsonv_string_cstr(arena, "steps");
+          if (!jsonv_obj_get(job_val.as.p, steps_key, &steps_val)) {
+            Jsonv_Obj *steps_obj = jsonv_obj_new(jarena, NULL);
+            steps_val = jsonv_val_obj(steps_obj);
+            jsonv_obj_set(jarena, job_val.as.p, steps_key, steps_val);
+          }
+          Jsonv_Obj *step_obj = jsonv_obj_new(jarena, NULL);
+          char *step_id_cstr = allocate_jsonv_string(arena, step->id.data, step->id.length);
+          jsonv_obj_set(jarena, steps_val.as.p, step_id_cstr, jsonv_val_obj(step_obj));
+
+          jsonv_obj_set(jarena, step_obj, allocate_jsonv_string_cstr(arena, "body"), transcoded);
+          jsonv_obj_set(jarena, step_obj, allocate_jsonv_string_cstr(arena, "outputs"), transcoded);
+
+          VariableAST *out_var = step->outputs_head;
+          if (out_var) {
+            Jsonv_Obj *projected_obj = jsonv_obj_new(jarena, NULL);
+            while (out_var) {
+              Jsonv_Value eval_res = jsonv_val_undefined();
+              int32_t eval_status = evaluate_expression(arena, out_var->expression, jarena, transcoded, &eval_res);
+              if (eval_status == ERR_SUCCESS && eval_res.tag != JSONV_VAL_UNDEFINED) {
+                char *var_name = allocate_jsonv_string(arena, out_var->name.data, out_var->name.length);
+                jsonv_obj_set(jarena, projected_obj, var_name, eval_res);
+              } else {
+                if (expression_references_unsampled_dependency(ast, out_var->expression)) {
+                  // Ignored
+                } else {
+                  fprintf(stderr, "Compile-time Validation Error: Path '%.*s' in step '%.*s' outputs does not exist in sample '%s'\n",
+                          (int)out_var->expression.length, out_var->expression.data,
+                          (int)step->id.length, step->id.data, filepath);
+                  return ERR_MISSING_VAR;
+                }
+              }
+              out_var = out_var->next;
+            }
+            jsonv_obj_set(jarena, step_obj, allocate_jsonv_string_cstr(arena, "outputs"), jsonv_val_obj(projected_obj));
+          }
+        }
+
+        VariableAST *sv_var = step->variables_head;
+        while (sv_var) {
+          Jsonv_Value val = jsonv_val_undefined();
+          int32_t status = evaluate_expression(arena, sv_var->expression, jarena, context_val, &val);
+          if (status != ERR_SUCCESS || val.tag == JSONV_VAL_UNDEFINED) {
+            if (expression_references_unsampled_dependency(ast, sv_var->expression)) {
+              // Ignored
+            } else {
+              fprintf(stderr, "Compile-time Validation Error: Variable '%.*s' expression '%.*s' in step '%.*s' is invalid or references nonexistent path\n",
+                      (int)sv_var->name.length, sv_var->name.data,
+                      (int)sv_var->expression.length, sv_var->expression.data,
+                      (int)step->id.length, step->id.data);
+              return ERR_MISSING_VAR;
+            }
+          }
+          sv_var = sv_var->next;
+        }
+
+        if (step->is_http) {
+          int32_t status = validate_string_expressions(arena, jarena, step->http.url, context_val, ast);
+          if (status != ERR_SUCCESS) return status;
+        }
+
+        step = step->next;
+      }
+    }
+    job = job->next_sorted;
+  }
+  return ERR_SUCCESS;
+  /*#endregion*/
+}
+
 int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
   /*#region*/
   if (!arena || !ast)
@@ -1425,6 +1747,9 @@ int32_t compile_workflow(Arena *arena, WorkflowAST *ast) {
 
   ast->jobs_head = sorted_head;
   ast->job_count = sorted_count;
+
+  int32_t val_status = validate_workflow_expressions(arena, ast);
+  if (val_status != ERR_SUCCESS) return val_status;
 
   return ERR_SUCCESS;
   /*#endregion*/

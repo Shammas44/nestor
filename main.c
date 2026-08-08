@@ -142,7 +142,16 @@ int main(int argc, char **argv) {
   // Check subcommands: plan, compile, apply
   if (argc > 1) {
     if (strcmp(argv[1], "plan") == 0) {
-      const char *proj_dir = argc > 2 ? argv[2] : ".";
+      bool show_context = false;
+      const char *proj_dir = ".";
+      for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--show-context") == 0) {
+          show_context = true;
+        } else if (argv[i][0] != '-' && strchr(argv[i], '=') == NULL) {
+          proj_dir = argv[i];
+        }
+      }
+
       WorkspaceMap map;
       int32_t load_res = workspace_load_directory(arena, proj_dir, &map);
       if (load_res != ERR_SUCCESS) {
@@ -150,6 +159,100 @@ int main(int argc, char **argv) {
         arena_destroy(arena);
         return 1;
       }
+
+      if (show_context) {
+        WorkflowDef *wf = map.root_workflow ? map.root_workflow : map.workflows_head;
+        if (!wf) {
+          fprintf(stderr, "Error: No workflows found in project directory %s\n", proj_dir);
+          arena_destroy(arena);
+          return 1;
+        }
+        Jsonv_Arena *jsonv_arena = jsonv_ctx_arena(wf->ast.jsonv_ctx);
+        Jsonv_Obj *root_obj = jsonv_obj_new(jsonv_arena, NULL);
+
+        // Parse command-line args for Inputs (key=value)
+        Jsonv_Obj *inputs_obj = jsonv_obj_new(jsonv_arena, NULL);
+        for (int i = 2; i < argc; i++) {
+          char *eq = strchr(argv[i], '=');
+          if (eq) {
+            *eq = '\0';
+            char *key = argv[i];
+            char *val = eq + 1;
+            jsonv_obj_set(jsonv_arena, inputs_obj, 
+                          allocate_jsonv_string(arena, key), 
+                          jsonv_val_str(allocate_jsonv_string(arena, val)));
+            *eq = '='; // restore
+          }
+        }
+        jsonv_obj_set(jsonv_arena, root_obj, 
+                      allocate_jsonv_string(arena, "inputs"), 
+                      jsonv_val_obj(inputs_obj));
+
+        // Populate Secrets from environment variables starting with NESTOR_SECRET_
+        Jsonv_Obj *secrets_obj = jsonv_obj_new(jsonv_arena, NULL);
+        for (char **env = environ; *env != NULL; env++) {
+          char *env_entry = *env;
+          if (strncmp(env_entry, "NESTOR_SECRET_", 14) == 0) {
+            char *eq = strchr(env_entry, '=');
+            if (eq) {
+              *eq = '\0';
+              char *key = env_entry + 14;
+              char *val = eq + 1;
+              jsonv_obj_set(jsonv_arena, secrets_obj, 
+                            allocate_jsonv_string(arena, key), 
+                            jsonv_val_str(allocate_jsonv_string(arena, val)));
+              *eq = '='; // restore
+            }
+          }
+        }
+        jsonv_obj_set(jsonv_arena, root_obj, 
+                      allocate_jsonv_string(arena, "secrets"), 
+                      jsonv_val_obj(secrets_obj));
+
+        // Populate Environment from host process
+        Jsonv_Obj *env_obj = jsonv_obj_new(jsonv_arena, NULL);
+        for (char **env = environ; *env != NULL; env++) {
+          char *env_entry = *env;
+          char *eq = strchr(env_entry, '=');
+          if (eq) {
+            *eq = '\0';
+            char *key = env_entry;
+            char *val = eq + 1;
+            jsonv_obj_set(jsonv_arena, env_obj, 
+                          allocate_jsonv_string(arena, key), 
+                          jsonv_val_str(allocate_jsonv_string(arena, val)));
+            *eq = '='; // restore
+          }
+        }
+        jsonv_obj_set(jsonv_arena, root_obj, 
+                      allocate_jsonv_string(arena, "env"), 
+                      jsonv_val_obj(env_obj));
+
+        Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+        // Evaluate global variables
+        VariableAST *gv = wf->ast.variables_head;
+        while (gv) {
+          Jsonv_Value val = jsonv_val_undefined();
+          int32_t status = evaluate_expression(arena, gv->expression, jsonv_arena, context_val, &val);
+          if (status == ERR_SUCCESS && val.tag != JSONV_VAL_UNDEFINED) {
+            char *tmp_name = na_alloc(arena, gv->name.length + 1);
+            if (tmp_name) {
+              memcpy(tmp_name, gv->name.data, gv->name.length);
+              tmp_name[gv->name.length] = '\0';
+              char *var_name = allocate_jsonv_string(arena, tmp_name);
+              jsonv_obj_set(jsonv_arena, root_obj, var_name, val);
+            }
+          }
+          gv = gv->next;
+        }
+
+        print_jsonv_value(context_val);
+        printf("\n");
+        arena_destroy(arena);
+        return 0;
+      }
+
       printf("Plan succeeded: Loaded %zu workflows, %zu providers. Zero contract or dependency cycles detected.\n",
              map.workflow_count, map.provider_count);
       arena_destroy(arena);

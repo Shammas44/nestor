@@ -53,6 +53,7 @@ typedef enum {
 typedef struct StepNode StepNode;
 struct StepNode {
   StringView id;
+  StringView schema_sample;
   VariableAST *variables_head;
   VariableAST *outputs_head;
   bool is_http; // true for http, false for plugin/uses

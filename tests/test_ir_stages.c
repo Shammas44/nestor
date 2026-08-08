@@ -40,23 +40,24 @@ Test(ir_stage10, transcoders) {
 
 
   // 1. XML Transcoder test
-  const char *xml_sample = "<name>Alice</name><role>Admin</role>";
+  const char *xml_sample = "<root><name>Alice</name><role>Admin</role></root>";
   Jsonv_Value doc_val;
-  int32_t xml_res = transcode_xml_to_document(arena, jarena, xml_sample, strlen(xml_sample), &doc_val);
+  int32_t xml_res = xml_to_json(arena, jarena, (StringView){xml_sample, strlen(xml_sample)}, XML_PARKER, &doc_val);
   cr_assert_eq(xml_res, ERR_SUCCESS, "XML transcoding should succeed");
   cr_assert_eq(doc_val.tag, JSONV_VAL_OBJ);
 
   // 2. CSV Transcoder test
   const char *csv_sample = "id,name,tier\n1,Alice,basic\n2,Bob,enterprise\n";
   Jsonv_Value table_val;
-  int32_t csv_res = transcode_csv_to_table(arena, jarena, csv_sample, strlen(csv_sample), ',', &table_val);
+  CsvOptions csv_opts = { .header = true, .delimiter = ',', .relaxed = false };
+  int32_t csv_res = csv_to_json(arena, jarena, (StringView){csv_sample, strlen(csv_sample)}, csv_opts, &table_val);
   cr_assert_eq(csv_res, ERR_SUCCESS, "CSV transcoding should succeed");
   cr_assert_eq(table_val.tag, JSONV_VAL_ARRAY);
 
   // 3. Binary Transcoder test
-  uint8_t bin_sample[] = { 0x48, 0x65, 0x6C, 0x6C, 0x6F }; // "Hello"
+  const char *bin_sample_b64 = "SGVsbG8="; // "Hello" in base64
   Jsonv_Value bin_val;
-  int32_t bin_res = transcode_binary_to_value(arena, jarena, bin_sample, 5, &bin_val);
+  int32_t bin_res = binary_decode(arena, jarena, (StringView){bin_sample_b64, strlen(bin_sample_b64)}, BINARY_BASE64, &bin_val);
   cr_assert_eq(bin_res, ERR_SUCCESS, "Binary transcoding should succeed");
   cr_assert_eq(bin_val.tag, JSONV_VAL_STRING);
 
