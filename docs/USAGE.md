@@ -8,10 +8,10 @@ Workflows in Nestor are specified as scenarios in either **JSON** or **YAML** fo
 
 ## CLI Usage & Subcommands
 
-Nestor compiles into a single binary (`bin/main`). It supports both standard AST-based execution (via standard input) and advanced workspace/bytecode commands:
+Nestor compiles into a single binary (`bin/main`). By default, it operates on compiled bytecode executed through the Nestor Virtual Machine (NVM). The legacy AST-based runner is preserved for regression testing but is bypassed for normal runs.
 
-### 1. Direct AST Execution
-To run a single workflow scenario directly, pipe the YAML or JSON contents to the binary:
+### 1. Direct Workflow Execution (Default: NVM Mode)
+To run a single workflow scenario, pipe the YAML or JSON contents to the binary. Under the hood, Nestor compiles the input configuration to bytecode in-memory and executes it using the NVM:
 ```bash
 # Basic run
 cat scenario.yaml | bin/main
@@ -36,10 +36,11 @@ bin/main compile <workspace_directory> -o output.nbc
 ```
 
 ### 4. VM Runtime Execution (`apply`)
-Loads and executes a pre-compiled bytecode file on the register-based Nestor Virtual Machine (NVM) runtime:
+Loads and executes a pre-compiled bytecode file on the Nestor Virtual Machine (NVM) runtime:
 ```bash
 bin/main apply output.nbc
 ```
+
 
 ---
 

@@ -4,7 +4,7 @@
 
 ## 1. System Architecture Overview
 
-Nestor is implemented in pure C for minimal overhead, zero-copy parsing, and absolute memory efficiency.
+Nestor is implemented in pure C for minimal overhead, zero-copy parsing, and absolute memory efficiency. By default, scenarios are compiled to bytecode and executed on the Nestor Virtual Machine (NVM).
 
 ```mermaid
 graph TB
@@ -14,22 +14,21 @@ graph TB
         Schema[workflow_schema.json] -->|Validation| Parser
     end
 
-    subgraph Compiler
+    subgraph Default VM Compiler & Interpreter
         Parser -->|AST Output| CompilerDAG[DAG Compiler]
-        CompilerDAG -->|Kahn's Sort| SortedGraph[Topologically Sorted Jobs]
-        CompilerDAG -->|Verify Links| CycleDetect{Cycles?}
-        CycleDetect -->|Yes| ErrCyclic[ERR_CYCLIC_DEP]
+        CompilerDAG -->|Check Cycles / Toposort| BytecodeComp[Bytecode Compiler]
+        BytecodeComp -->|.nbc Bytecode| NVM[Nestor VM Interpreter]
+        NVM -->|HTTP Requests| LibCurl[libcurl Bridge]
+        NVM -->|Expressions / JSONata| JSONata[jsonata Bridge]
+        NVM -->|DB Persistence / Caching| SQLite[(sqlite3)]
     end
 
-    subgraph Execution
-        SortedGraph -->|Evaluate Node| ExecEngine[Execution Engine]
-        ExecEngine -->|Task/HTTP| LibCurl[libcurl Bridge]
-        ExecEngine -->|Transformations| JSONata[jsonata Bridge]
-        ExecEngine -->|DB Persistence| SQLite[(sqlite3 / pq)]
+    subgraph Legacy execution path (Deprecated)
+        CompilerDAG -.->|Legacy AST Path| LegacyDAG[Legacy DAG Runner]
     end
 
     subgraph Observability
-        ExecEngine -->|Logs Stream| AhoCorasick[Aho-Corasick Redactor]
+        NVM -->|Logs Stream| AhoCorasick[Aho-Corasick Redactor]
         AhoCorasick -->|Safe Output| SafeLogs[Log Sink]
     end
 ```
@@ -167,26 +166,32 @@ struct JobNode {
 
 ---
 
-## 5. Execution Engine & State Machine
+## 5. Default VM Execution Engine & Interpreter
 
-### 5.1 Bit-Packed State Stack
-Tracks nested iterations and execution loops without memory allocation by compressing indexes and conditions into single `uint64_t` registers:
+Nestor's default runtime execution engine is the **Nestor Virtual Machine (NVM)**. It replaces the legacy AST interpretation engine (`runner.c`), executing compiled bytecode sequences with minimal overhead.
 
-```c
-typedef struct {
-    uint64_t* data;
-    size_t top;
-    size_t capacity;
-} BitStack;
-```
+### 5.1 Stack-Based VM Model
+NVM is a stack-based machine operating on a sequential array of instructions.
+*   **Evaluation Stack**: A bounded array of size `VM_STACK_LIMIT` containing `Jsonv_Value` items. Used for passing operands and storing local intermediate results.
+*   **Call Stack**: A stack tracking return PCs and isolated frame contexts during sub-workflow calls.
+*   **Registers**:
+    *   `PC` (Program Counter): Points to the instruction about to be read from the bytecode.
+    *   `SP` (Stack Pointer): Tracks the active top of the evaluation stack.
 
-### 5.2 Scoped Variable Resolution
-*   **Evaluation Context**: During execution, the runner builds a virtual JSON context containing `inputs`, `env`, `secrets`, `needs`, `steps`, and `providers`.
-*   **Lexical Scoping**: Evaluated using `push_local_vars` and `pop_local_vars` dynamically. Private variables are cleared at job completion and bypassed during state serialization.
-*   **Outcome Projection**: If step-level `outputs` are configured, the projected values are evaluated, and the parent response body is instantly freed from the arena.
+### 5.2 Compiling & Mapped Execution
+1.  **AST-to-Bytecode Compilation**: The bytecode compiler (`bytecode_compiler.c`) performs a topological sort on workflow jobs and compiles variables, loops, control flows, and steps into standard big-endian opcodes.
+2.  **Mmap Loading**: The VM maps bytecode files (`.nbc`) into memory using `mmap()` (zero-copy overhead).
+3.  **Execute Loop**: Iterates through instructions using a switch-based decoding loop. Each opcode acts directly on the evaluation stack and triggers native curl, JSONata, or provider queries.
 
-### 5.3 Export Job Execution
-*   When executing an `export` job, the runner evaluates the file path string (using `resolve_string`) and the data structure (using `resolve_json_value`), serializes the data to JSON format, and writes it directly to disk.
+### 5.3 Bit-Packed State Stack
+For loops and parallel branches, the interpreter tracks nested iterations and states without allocation by compressing scopes and condition bits into a single `uint64_t` stack (`BitStack`).
+
+### 5.4 Scoped Variable Resolution
+*   **VM Scope Frames**: When entering a block, the VM pushes a new frame context. Variables are resolved dynamically by looking up key mappings on the evaluation stack and parent frame context.
+*   **Visibility**: Private variables exist purely in memory during execution. Public variables are serialized to the state context under the job outputs object.
+
+### 5.5 Legacy AST Runner (runner.c)
+The previous interpreter (`runner.c`) directly navigated the AST nodes to resolve dependencies and evaluate steps. This engine is kept for regression checks but is deactivated in default runtime environments.
 
 ---
 

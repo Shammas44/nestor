@@ -29,21 +29,22 @@ This document tracks the current completion status of stages outlined in the [RO
 *   [x] **Stage 8.10: Dynamic Plugin SDK & Subprocess Sandboxing**
 *   [x] **Stage 9: Provider SDK & Service Provider Interface (SPI)**
 *   [x] **Stage 9.5: Multi-File Workspace Loader & Dependency Compiler**
-*   [ ] **Stage 10: Multi-Format Transcoder & JSON-IR**
-    *   [ ] Stage 10.1: CSV/TSV Transcoder (`csv_to_json`)
-    *   [ ] Stage 10.2: XML Transcoder (`xml_to_json`)
-    *   [ ] Stage 10.3: URL-Encoded Form Transcoder (`form_to_json`)
-    *   [ ] Stage 10.4: Binary Encoding (`binary_encode` / `binary_decode`)
-    *   [ ] Stage 10.5: YAML Transcoder (`yaml_to_json`)
-    *   [ ] Stage 10.6: Output Formatters (`$csvFormat`, `$xmlFormat`, `$formEncode`, `$binaryEncode`)
-    *   [ ] Stage 10.7: JSONata Function Registration
+*   [x] **Stage 10: Multi-Format Transcoder & JSON-IR**
+    *   [x] Stage 10.1: CSV/TSV Transcoder (`csv_to_json`)
+    *   [x] Stage 10.2: XML Transcoder (`xml_to_json`)
+    *   [x] Stage 10.3: URL-Encoded Form Transcoder (`form_to_json`)
+    *   [x] Stage 10.4: Binary Encoding (`binary_encode` / `binary_decode`)
+    *   [x] Stage 10.5: YAML Transcoder (`yaml_to_json`)
+    *   [x] Stage 10.6: Output Formatters (`$csvFormat`, `$xmlFormat`, `$formEncode`, `$binaryEncode`)
+    *   [x] Stage 10.7: JSONata Function Registration
 *   [x] **Stage 10.8: Nested Sub-Workflow Execution Stack**
 *   [x] **Stage 11: Static Schema Verification & Context Inspection**
-    *   [ ] Stage 11.1: Context Inspection (`plan --show-context`)
-    *   [ ] Stage 11.2: Sample Anchoring (`schema_sample`)
+    *   [x] Stage 11.1: Context Inspection (`plan --show-context`)
+    *   [x] Stage 11.2: Sample Anchoring (`schema_sample`)
     *   [x] Stage 11.3: Contract Type Validation & CLI Tooling
 *   [x] **Stage 11.5: Bytecode Compiler & NBC Exporter**
-*   [x] **Stage 11.7: Nestor VM (NVM) Runtime Execution Loop**
+*   [x] **Stage 11.7: Nestor VM (NVM) Runtime Execution Loop (Default Engine)**
+
 
 ---
 
