@@ -66,7 +66,18 @@ This document tracks the current completion status of stages outlined in the [RO
 
 ---
 
-## Phase 2: Gateway Daemon & Business APIs (Stateful Server)
+## Phase 2: Full Nestor VM (NVM) Implementation (Next Milestone)
 
-*   [ ] **Stage 12: Gateway Daemon & HTTP REST Mapping**
-*   [ ] **Stage 13: Webhook Routing & Correlation Resuming**
+*   [ ] **Stage 17: VM Opcode Completeness**
+*   [ ] **Stage 17.5: Direct VM I/O & Plugin Bridges**
+*   [ ] **Stage 18: Stack-Frame Scoped Variables & Memory Compaction**
+*   [ ] **Stage 18.5: SQLite Caching & Locking in NVM**
+*   [ ] **Stage 19: NVM State Serialization & Resuming**
+
+---
+
+## Phase 3: Gateway Daemon & Business APIs (Stateful Server)
+
+*   [ ] **Stage 20: Gateway Daemon & HTTP REST Mapping**
+*   [ ] **Stage 21: Webhook Routing & Correlation Resuming**
+

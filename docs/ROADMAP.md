@@ -64,9 +64,22 @@ This phase introduces stateful capabilities and advanced scoping rules to optimi
 
 ---
 
-## Phase 2: Gateway Daemon & Business APIs (Stateful Server)
+## Phase 2: Full Nestor VM (NVM) Implementation (Next Milestone)
 
-Phase 2 transitions the Integration Runtime to Server Mode, wrapping workflows in API gateways.
+This phase focuses on completing the stack-based VM runtime to fully replace the legacy DAG runner.
 
-*   **Stage 12: Gateway Daemon**: Embedding `libmicrohttpd` to expose endpoints, deploying schemas, and running REST-to-workflow bindings.
-*   **Stage 13: Webhook Correlation**: Correlation routing, waking up suspended processes on webhook triggers.
+*   **Stage 17: VM Opcode Completeness**: Implement full support for control flow routing, binary conditions, switch cases, loops, fork/join barriers, and error fallback handlers directly inside the `nvm.c` loop.
+*   **Stage 17.5: Direct VM I/O & Plugin Bridges**: Integrate the non-blocking `curl_multi` loop and sandboxed subprocess plugin runners into VM steps opcode execution.
+*   **Stage 18: Stack-Frame Scoped Variables & Memory Compaction**: Implement scoped variables resolution on the evaluation stack and loop sub-arenas memory compaction at loop frames.
+*   **Stage 18.5: SQLite Caching & Locking in NVM**: Perform inline SQLite cache revalidations and acquire workspace execution locks (`.tfstate.lock`) during VM execution.
+*   **Stage 19: NVM State Serialization & Resuming**: Serialize registers (PC, SP), evaluation stack, call stack, and context frames to `.tfstate` files on wait signals and restore VM state upon resumption.
+
+---
+
+## Phase 3: Gateway Daemon & Business APIs (Stateful Server)
+
+Phase 3 transitions the Integration Runtime to Server Mode, wrapping workflows in API gateways.
+
+*   **Stage 20: Gateway Daemon**: Embedding `libmicrohttpd` to expose endpoints, deploying schemas, and running REST-to-workflow bindings.
+*   **Stage 21: Webhook Correlation**: Correlation routing, waking up suspended processes on webhook triggers.
+
