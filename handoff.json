@@ -1,0 +1,161 @@
+{
+  "$id": "nestor-nvm-phase2-handoff",
+  "schema_version": "1.0",
+  "timestamp": "2026-08-08T15:21:00Z",
+  "repository": {
+    "root": "/Users/sebastientraber/Documents/Prog/c/nestor",
+    "worktree": "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv",
+    "branch": "feature/json-validation-jsonv",
+    "commit": "b6b8f9cfe005405f57459683a78d0ec3175257fc",
+    "has_uncommitted_changes": false
+  },
+  "project": {
+    "name": "Nestor Orchestration Engine",
+    "summary": "Nestor is a high-performance, memory-optimized workflow engine in C utilizing a custom virtual machine (NVM) and chained arena allocator."
+  },
+  "task": {
+    "objective": "Complete Phase 2: Full Nestor VM (NVM) Implementation (Next Milestone)",
+    "current_task": "Prepare next agent to implement all remaining NVM opcodes, step processing, scoped variables, caching, and state serialization in nvm.c to fully replace the DAG runner.",
+    "next_steps": [
+      "Implement all control flow instructions in src/comm/struct/nvm.c (OP_FORK, OP_JOIN, switch routing, conditional edges, error fallbacks).",
+      "Integrate non-blocking curl_multi and plugin runners into NVM steps execution.",
+      "Implement evaluation-stack scoped variables lookup and sub-arenas loop memory compaction in nvm.c.",
+      "Implement SQLite cache querying and tfstate lock checking in VM runs.",
+      "Implement NVM state serialization to .tfstate and resuming on signals."
+    ],
+    "success_criteria": [
+      "All VM tests pass and NVM successfully executes arbitrary workflow scenarios.",
+      "All E2E and unit tests pass when VM is set as the default execution engine in main.c."
+    ],
+    "do_not_modify": [
+      "The custom chained arena memory management laws must not be broken (no stdlib malloc/free).",
+      "Standard folding syntax /*#region*/ and /*#endregion*/ must be strictly preserved."
+    ]
+  },
+  "progress": {
+    "completed": [
+      "Stage 10: Multi-format XML/CSV/YAML/Form/Binary transcoders and registration in JSONata.",
+      "Stage 11: CLI context inspection via plan --show-context and compile-time path verification via schema_sample.",
+      "Created transcoder.test.c and updated USAGE.md, ARCHITECTURE.md, IMPLEMENTATION.md, PROGRESS.md, and ROADMAP.md."
+    ],
+    "in_progress": [],
+    "remaining": [
+      "Phase 2: Full Nestor VM (NVM) Implementation (Stages 17-19)."
+    ],
+    "blockers": []
+  },
+  "documentation": [
+    {
+      "path": "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/ARCHITECTURE.md",
+      "purpose": "Details system design and specifies the VM as the default runtime engine."
+    },
+    {
+      "path": "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/IMPLEMENTATION.md",
+      "purpose": "Provides technical implementation details and zero-copy JSON IR specification."
+    },
+    {
+      "path": "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/ISA.md",
+      "purpose": "Instruction Set Architecture reference for the Nestor VM (.nbc format and opcodes)."
+    },
+    {
+      "path": "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/ROADMAP.md",
+      "purpose": "Outlines future phases and details the Phase 2 Nestor VM implementation milestone."
+    },
+    {
+      "path": "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/PROGRESS.md",
+      "purpose": "Tracks completeness of Nestor stages."
+    }
+  ],
+  "codebase": {
+    "directories": [
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/src/comm/struct",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/src/comm/utils",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/src/include"
+    ],
+    "files_modified": [
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/src/comm/struct/compiler.c",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/main.c",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/ARCHITECTURE.md",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/IMPLEMENTATION.md",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/USAGE.md",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/PROGRESS.md",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/docs/ROADMAP.md"
+    ],
+    "files_to_modify": [
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/src/comm/struct/nvm.c",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/main.c"
+    ],
+    "files_referenced": [
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/src/include/nvm.h",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/src/include/bytecode.h",
+      "/Users/sebastientraber/Documents/Prog/c/nestor/.worktrees/json-validation-jsonv/src/comm/struct/bytecode_compiler.c"
+    ]
+  },
+  "architecture": [
+    "Stack-based virtual machine (NVM) using mapped .nbc bytecode via mmap.",
+    "Chained arena allocation model passing Arena* context recursively.",
+    "Zero-copy string representation using length-delimited StringView structs."
+  ],
+  "decisions": [
+    {
+      "decision": "Update docs to designate NVM as the default execution engine",
+      "reason": "Aligns the engineering goals to sunset the AST-based DAG runner and execute via stack opcodes."
+    },
+    {
+      "decision": "Deactivate AST execution fallback in documentation but preserve it in main.c code for now",
+      "reason": "Ensures current regression tests remain passing while VM execute loop is built out."
+    }
+  ],
+  "context": {
+    "discoveries": [
+      "Header shifts or changes in src/include/ast.h require make clean to reset all compiled offsets and avoid ASan segmentation faults.",
+      "Unit tests running criterion inside sandbox require BypassSandbox: true or state lock files will fail to release or permission errors will occur."
+    ],
+    "assumptions": [
+      "The VM execute loop (nvm.c) will be expanded opcode-by-opcode using curl/JSONata integration structures already verified in the DAG runner."
+    ],
+    "rejected_approaches": [
+      "Changing the default execution loop in main.c immediately to NVM was rejected because the VM execution loop is currently a stub and would break E2E integration tests."
+    ],
+    "known_limitations": [
+      "NVM is currently only stubbed for OP_RESOLVE, OP_FORK, OP_JOIN, and OP_CALL_PROVIDER."
+    ],
+    "conversation_context": [
+      "Preserve function folding rules in C files (/*#region*/ ... /*#endregion*/)."
+    ]
+  },
+  "issues": [],
+  "validation": {
+    "commands": [
+      "OPTION=dev make clean all",
+      "MallocNanoZone=0 bin/test_runner_unit --ignore-warnings -j1",
+      "MallocNanoZone=0 bin/test_runner_e2e -j1"
+    ],
+    "performed": [
+      "Clean compilation",
+      "Passed all 64 unit tests in test_runner_unit",
+      "Passed all 22 E2E tests in test_runner_e2e"
+    ],
+    "pending": []
+  },
+  "environment": {
+    "languages": [
+      "C (C11)"
+    ],
+    "frameworks": [],
+    "package_managers": [],
+    "tooling": [
+      "Make",
+      "Clang/GCC",
+      "Valgrind",
+      "Criterion"
+    ]
+  },
+  "commands": [
+    "OPTION=dev make clean all",
+    "MallocNanoZone=0 bin/test_runner_unit -j1"
+  ],
+  "notes": [
+    "Clean the workspace of any temporary .*tfstate files using rm -f .*.tfstate before committing or testing."
+  ]
+}
