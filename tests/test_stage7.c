@@ -138,6 +138,7 @@ static void run_concurrency_mock_server(int write_fd) {
     }
   }
 
+  usleep(50000);
   close(server_fd);
   exit(0);
   /*#endregion*/
@@ -263,6 +264,11 @@ TIMED_TEST(stage7, parallel_fork_join_any, init, fini) {
 
   int wstatus;
   waitpid(pid, &wstatus, 0);
+  if (WIFSIGNALED(wstatus)) {
+    printf("DEBUG: Child process killed by signal %d\n", WTERMSIG(wstatus));
+  } else if (WIFEXITED(wstatus)) {
+    printf("DEBUG: Child process exited with status %d\n", WEXITSTATUS(wstatus));
+  }
   arena_destroy(arena);
   /*#endregion*/
 }

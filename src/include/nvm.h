@@ -4,6 +4,7 @@
 #include "arena.h"
 #include "bytecode.h"
 #include "error_codes.h"
+#include "transport.h"
 #define JSONV_YAML_SUPPORT
 #include <jsonv/jsonv.h>
 #include <stdint.h>
@@ -42,6 +43,13 @@ typedef struct {
 
   NVMCallFrame *call_stack_top;
   size_t call_stack_depth;
+
+  WorkflowAST *ast;
+  Jsonv_Value *context_val;
+  Transport *transport;
+
+  int ipc_listen_fd;
+  struct IPCClient *ipc_clients_head;
 } NVMContext;
 
 int32_t nvm_init_from_file(NVMContext *ctx, Arena *arena, Jsonv_Arena *jsonv_arena, const char *nbc_file_path);

@@ -40,16 +40,11 @@ int32_t bytecode_compile_workflow(Arena *arena, WorkflowAST *ast, const char *ou
   JobNode *job = ast->jobs_head;
   while (job) {
     uint32_t id_const = add_constant(&cp, job->id.data ? job->id.data : "", job->id.length);
-    code_buf[code_size++] = OP_PUSH_CONST;
+    code_buf[code_size++] = OP_CALL_PROVIDER;
     code_buf[code_size++] = (id_const >> 24) & 0xFF;
     code_buf[code_size++] = (id_const >> 16) & 0xFF;
     code_buf[code_size++] = (id_const >> 8) & 0xFF;
     code_buf[code_size++] = id_const & 0xFF;
-
-    if (job->type == NODE_TASK || job->type == NODE_EXPORT || job->type == NODE_TRANSFORM) {
-      code_buf[code_size++] = OP_CALL_PROVIDER;
-      code_buf[code_size++] = 0; code_buf[code_size++] = 0; code_buf[code_size++] = 0; code_buf[code_size++] = id_const;
-    }
     job = job->next_sorted;
   }
   code_buf[code_size++] = OP_RETURN;

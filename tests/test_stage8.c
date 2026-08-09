@@ -1464,6 +1464,9 @@ END_TIMED_TEST
 TIMED_TEST(stage8, custom_cache_overrides, init, fini)
 /*#region*/
   Arena *arena = arena_create(1024 * 1024);
+  unlink(".test_custom_cache.db");
+  int32_t rc = cache_init(".test_custom_cache.db", 10);
+  cr_assert_eq(rc, ERR_SUCCESS);
 
   const char *yaml =
     "version: \"2.0.0\"\n"
@@ -1543,6 +1546,8 @@ TIMED_TEST(stage8, custom_cache_overrides, init, fini)
   cr_assert_eq(run_status2, ERR_SUCCESS);
   mock_trans2->ops->destroy(mock_trans2);
 
+  cache_close();
+  unlink(".test_custom_cache.db");
   arena_destroy(arena);
 /*#endregion*/
 END_TIMED_TEST

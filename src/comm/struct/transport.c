@@ -147,7 +147,6 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
   int32_t status = resolve_string(arena, step->http.url, jsonv_arena, context_val, &resolved_url);
   if (status != ERR_SUCCESS) return status;
   char *url_cstr = sv_to_cstring(arena, resolved_url);
-
   curl_easy_setopt(curl, CURLOPT_URL, url_cstr);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -309,6 +308,9 @@ static int32_t curl_poll_requests(Transport *t, int *still_running) {
         curl_easy_getinfo(msg->easy_handle, CURLINFO_RESPONSE_CODE, &status_code);
         cr->status_code = status_code;
         cr->error = (msg->data.result != CURLE_OK);
+        if (msg->data.result != CURLE_OK) {
+          fprintf(stderr, "DEBUG: curl_multi completed transfer error: %s (%d)\n", curl_easy_strerror(msg->data.result), msg->data.result);
+        }
       }
     }
   }

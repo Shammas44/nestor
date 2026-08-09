@@ -3,7 +3,7 @@
 
 #include "arena.h"
 #include "ast.h"
-#include "runner.h"
+#include "response_buffer.h"
 #include "jsonv/jsonv.h"
 #include <stdbool.h>
 

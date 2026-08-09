@@ -19,7 +19,7 @@ jobs:
     - id: get_xwing
       http:
         method: GET
-        url: https://swapi.dev/api/starships/12/
+        url: https://swapi.info/api/starships/12/
 
   # This is a comment
   fetch_falcon:
@@ -28,7 +28,7 @@ jobs:
     - id: get_falcon
       http:
         method: GET
-        url: https://swapi.dev/api/starships/10/
+        url: https://swapi.info/api/starships/10/
 
   # This is a comment
   join_fleet:

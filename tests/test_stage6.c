@@ -317,7 +317,7 @@ TIMED_TEST(stage6, loop_while_iteration, init, fini)
   Jsonv_Value index_val;
   cr_assert(jsonv_obj_get(root_obj, allocate_jsonv_string(arena, "index"), &index_val));
   cr_assert_eq(index_val.tag, JSONV_VAL_INT);
-  cr_assert_eq(index_val.as.i, 3);
+  cr_assert_eq(index_val.as.i, 3, "Expected index to be 3, but got %lld", index_val.as.i);
 
   arena_destroy(arena);
 /*#endregion*/

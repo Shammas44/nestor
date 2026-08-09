@@ -1,6 +1,7 @@
 #include "runner.h"
 #include "loader.h"
 #include "evaluator.h"
+#include "nvm.h"
 #include <jsonata/jsonata.h>
 #include "aho_corasick.h"
 #include "transport.h"
@@ -26,10 +27,7 @@
 #endif
 #define jsonv_val_undefined() ((Jsonv_Value){.tag = JSONV_VAL_UNDEFINED, .as = {.p = NULL}})
 
-typedef struct ActiveJob ActiveJob;
-static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj);
-static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, JobNode *job, ActiveJob *aj_out);
-static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, ActiveJob *aj, Transport *transport);
+// Declarations are in runner.h
 
 static void *my_jsonv_arena_alloc(void *user_data, size_t size) {
   /*#region*/
@@ -80,9 +78,6 @@ static const Jsonv_Arena_Ops my_jsonv_ops = {
 
 void *na_alloc(Arena *arena, size_t size);
 
-static void push_local_vars(Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, Jsonv_Value local_vars);
-static void pop_local_vars(Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, Jsonv_Value local_vars);
-static int32_t evaluate_job_variables(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, JobNode *job, Jsonv_Value local_vars);
 static int32_t evaluate_step_variables(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, JobNode *job, StepNode *step, Jsonv_Value local_vars);
 
 
@@ -475,7 +470,7 @@ static JobNode *find_job_by_id(WorkflowAST *ast, StringView id) {
 
 static void propagate_control_skips(WorkflowAST *ast, JobNode *job);
 
-static void mark_job_skipped(WorkflowAST *ast, StringView id) {
+void mark_job_skipped(WorkflowAST *ast, StringView id) {
   /*#region*/
   // Mark target job as skipped and recursively skip its branches.
   JobNode *j = find_job_by_id(ast, id);
@@ -516,46 +511,9 @@ static void propagate_control_skips(WorkflowAST *ast, JobNode *job) {
 }
 
 
-typedef struct ActiveJob ActiveJob;
-struct ActiveJob {
-  JobNode *job;
-  StepNode *curr_step;
-  Jsonv_Value steps_state_obj;
-  Jsonv_Value local_vars;
+// ActiveJob struct moved to runner.h
 
-  // Loop support
-  bool is_loop;
-  size_t loop_iter;
-  size_t max_iterations;
-  Jsonv_Value loop_history_obj;
-  char loop_stream_file_path[256];
-  size_t loop_stream_record_offset;
-
-  // Active HTTP transport fields
-  void *easy_handle;
-  ResponseBuffer resp_buf;
-
-  // Active Plugin fields
-  PluginExecutor plugin_exec;
-
-  // Retry tracking fields
-  int curr_step_retry_attempt;
-  struct timeval next_retry_time;
-  bool is_waiting_retry;
-
-  Arena *loop_arena;
-
-  // Caching/validation fields
-  bool is_validating;
-  char cached_key[65];
-  char cached_etag[128];
-  char cached_last_modified[128];
-  char *cached_output_payload;
-
-  ActiveJob *next;
-};
-
-static void push_local_vars(Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, Jsonv_Value local_vars) {
+void push_local_vars(Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, Jsonv_Value local_vars) {
   /*#region*/
   if (local_vars.tag == JSONV_VAL_OBJ && context_val.tag == JSONV_VAL_OBJ) {
     Jsonv_Obj *local_obj = local_vars.as.p;
@@ -569,7 +527,7 @@ static void push_local_vars(Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, J
   /*#endregion*/
 }
 
-static void pop_local_vars(Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, Jsonv_Value local_vars) {
+void pop_local_vars(Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, Jsonv_Value local_vars) {
   /*#region*/
   if (local_vars.tag == JSONV_VAL_OBJ && context_val.tag == JSONV_VAL_OBJ) {
     Jsonv_Obj *local_obj = local_vars.as.p;
@@ -582,7 +540,7 @@ static void pop_local_vars(Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, Js
   /*#endregion*/
 }
 
-static int32_t evaluate_job_variables(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, JobNode *job, Jsonv_Value local_vars) {
+int32_t evaluate_job_variables(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, JobNode *job, Jsonv_Value local_vars) {
   /*#region*/
   if (!job->variables_head) return ERR_SUCCESS;
   
@@ -662,7 +620,7 @@ static int32_t evaluate_step_variables(Arena *arena, Jsonv_Arena *jsonv_arena, J
   /*#endregion*/
 }
 
-static bool is_edge_satisfied(JobNode *job, size_t d, JobNode *dep) {
+bool is_edge_satisfied(JobNode *job, size_t d, JobNode *dep) {
   /*#region*/
   uint8_t mask = 0;
   if (job->depends_on_conditions) {
@@ -682,7 +640,7 @@ static bool is_edge_satisfied(JobNode *job, size_t d, JobNode *dep) {
   /*#endregion*/
 }
 
-static bool is_ready(JobNode *job) {
+static __attribute__((unused)) bool is_ready(JobNode *job) {
   /*#region*/
   // Determine if all upstream dependencies of a non-join job are completed.
   if (job->execution_state != STATE_PENDING) return false;
@@ -700,7 +658,7 @@ static bool is_ready(JobNode *job) {
   /*#endregion*/
 }
 
-static void update_job_states(WorkflowAST *ast) {
+void update_job_states(WorkflowAST *ast) {
   /*#region*/
   // Evaluate joins and propagate skipped/failed states topologically.
   bool changed = true;
@@ -895,7 +853,7 @@ static void nestor_chunk_match_cb(void *user_data, Jsonata_ValType type, const c
   /*#endregion*/
 }
 
-static int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj) {
+int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj) {
   /*#region*/
   // Setup next loop iteration index and variables in workflow context.
   if (aj->loop_arena) {
@@ -1240,7 +1198,7 @@ static void save_step_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob 
   /*#endregion*/
 }
 
-static int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob *aj, long status_code) {
+int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob *aj, long status_code) {
   /*#region*/
   // Complete processing and bind HTTP response variables back into workspace.
   if (aj->is_validating && status_code == 304) {
@@ -1321,7 +1279,7 @@ static int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, 
 }
 
 
-static bool handle_step_failure(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj, const char *err_msg) {
+bool handle_step_failure(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj, const char *err_msg) {
   /*#region*/
   (void)arena;
   (void)jsonv_arena;
@@ -1366,7 +1324,7 @@ static bool handle_step_failure(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Va
   /*#endregion*/
 }
 
-static int32_t apply_step_fallback(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj, WorkflowAST *ast, Transport *transport) {
+int32_t apply_step_fallback(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, ActiveJob *aj, WorkflowAST *ast, Transport *transport) {
   /*#region*/
   StepNode *step = aj->curr_step;
   fprintf(stderr, "STEP FAILURE. Applying fallback for step %.*s...\n",
@@ -1390,7 +1348,7 @@ static int32_t apply_step_fallback(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv
   /*#endregion*/
 }
 
-static void process_ipc_request(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, int client_fd, const char *req_str) {
+void process_ipc_request(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, int client_fd, const char *req_str) {
   /*#region*/
   Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
   if (!temp_ctx) return;
@@ -1490,7 +1448,7 @@ static void process_ipc_request(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Va
 
 
 
-static int32_t complete_plugin_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob *aj, long exit_code) {
+int32_t complete_plugin_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob *aj, long exit_code) {
   /*#region*/
   StepNode *step = aj->curr_step;
 
@@ -1613,7 +1571,7 @@ static int32_t build_outputs_ast(Arena *arena, Jsonv_Value v_outputs, VariableAS
   /*#endregion*/
 }
 
-static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, ActiveJob *aj, Transport *transport) {
+int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, ActiveJob *aj, Transport *transport) {
   /*#region*/
   // Advance steps within an active job; executes non-blocking tasks inline.
   if (aj->job->execution_state == STATE_FAILED || aj->is_waiting_retry) {
@@ -1874,13 +1832,7 @@ static int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
   /*#endregion*/
 }
 
-typedef struct IPCClient IPCClient;
-struct IPCClient {
-  int fd;
-  char buf[1024];
-  int len;
-  IPCClient *next;
-};
+// IPCClient definition moved to runner.h
 
 static void parse_cache_control(const char *cc, bool *no_cache, bool *no_store, int *max_age) {
   /*#region*/
@@ -1960,7 +1912,7 @@ static bool job_has_resource(JobNode *job) {
   /*#endregion*/
 }
 
-static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj) {
+void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value context_val, JobNode *job, ActiveJob *aj) {
   /*#region*/
   if (job_has_resource(job) || !job->cache_enabled) {
     return;
@@ -2076,7 +2028,7 @@ static void store_job_in_cache(Arena *arena, WorkflowAST *ast, Jsonv_Value conte
   /*#endregion*/
 }
 
-static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, JobNode *job, ActiveJob *aj_out) {
+bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value *context_val, JobNode *job, ActiveJob *aj_out) {
   /*#region*/
   if (job_has_resource(job) || !job->cache_enabled) {
     return false;
@@ -2187,7 +2139,7 @@ static bool check_and_apply_cache(Arena *arena, Jsonv_Arena *jsonv_arena, Workfl
   /*#endregion*/
 }
 
-static bool jsonv_values_equal(Jsonv_Value a, Jsonv_Value b) {
+bool jsonv_values_equal(Jsonv_Value a, Jsonv_Value b) {
   /*#region*/
   if (a.tag != b.tag) return false;
   switch (a.tag) {
@@ -2212,7 +2164,7 @@ static bool jsonv_values_equal(Jsonv_Value a, Jsonv_Value b) {
   /*#endregion*/
 }
 
-static void get_state_paths(WorkflowAST *ast, char *state_path, size_t state_len, char *lock_path, size_t lock_len) {
+void get_state_paths(WorkflowAST *ast, char *state_path, size_t state_len, char *lock_path, size_t lock_len) {
   /*#region*/
   char wf_name[256];
   if (ast->name.length > 0 && ast->name.length < 250) {
@@ -2245,7 +2197,7 @@ static void release_state_lock(const char *lock_path) {
   /*#endregion*/
 }
 
-static int32_t save_tfstate(Arena *arena, const char *state_path, Jsonv_Value context_val) {
+int32_t save_tfstate(Arena *arena, const char *state_path, Jsonv_Value context_val) {
   /*#region*/
   char *serialized = NULL;
   int32_t rc = serialize_jsonv_value(arena, context_val, &serialized);
@@ -2367,7 +2319,7 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
   if (!arena || !ast || !context_val || !transport) return ERR_OOM;
 
   int32_t ret_val = ERR_SUCCESS;
-  ActiveJob *active_jobs_head = NULL;
+
 
   ACNode *ac_root = ac_create_trie(arena, *context_val);
   set_global_ac_root(ac_root);
@@ -2430,877 +2382,31 @@ int32_t run_workflow_opt(Arena *arena, WorkflowAST *ast, Jsonv_Value *context_va
   char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
   jsonv_obj_set(jsonv_arena, context_val->as.p, k_jobs, jsonv_val_obj(jobs_root_obj));
 
-  ast->ipc_socket_path[0] = '\0';
-  int ipc_listen_fd = -1;
-  IPCClient *ipc_clients_head = NULL;
-
-  snprintf(ast->ipc_socket_path, sizeof(ast->ipc_socket_path), "/tmp/nestor_ipc_%p.sock", (void *)ast);
-  unlink(ast->ipc_socket_path);
-
-  ipc_listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (ipc_listen_fd >= 0) {
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, ast->ipc_socket_path, sizeof(addr.sun_path) - 1);
-    if (bind(ipc_listen_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
-        listen(ipc_listen_fd, 5) == 0) {
-      int flags = fcntl(ipc_listen_fd, F_GETFL, 0);
-      fcntl(ipc_listen_fd, F_SETFL, flags | O_NONBLOCK);
-    } else {
-      close(ipc_listen_fd);
-      ipc_listen_fd = -1;
-      ast->ipc_socket_path[0] = '\0';
-    }
+  char temp_nbc_path[256];
+  snprintf(temp_nbc_path, sizeof(temp_nbc_path), "/tmp/nestor_run_%p.nbc", (void *)ast);
+  int32_t compile_res = bytecode_compile_workflow(arena, ast, temp_nbc_path);
+  if (compile_res != ERR_SUCCESS) {
+    release_state_lock(lock_path);
+    return compile_res;
   }
 
-  while (1) {
-    if (ipc_listen_fd >= 0) {
-      while (1) {
-        int client_fd = accept(ipc_listen_fd, NULL, NULL);
-        if (client_fd < 0) break;
-        int flags = fcntl(client_fd, F_GETFL, 0);
-        fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
-        IPCClient *cli = na_alloc(arena, sizeof(IPCClient));
-        if (cli) {
-          cli->fd = client_fd;
-          cli->len = 0;
-          cli->buf[0] = '\0';
-          cli->next = ipc_clients_head;
-          ipc_clients_head = cli;
-        } else {
-          close(client_fd);
-        }
-      }
-    }
-
-    IPCClient **curr_cli = &ipc_clients_head;
-    while (*curr_cli) {
-      IPCClient *cli = *curr_cli;
-      char read_buf[256];
-      ssize_t n = recv(cli->fd, read_buf, sizeof(read_buf) - 1, 0);
-      if (n > 0) {
-        if (cli->len + n < (int)sizeof(cli->buf) - 1) {
-          memcpy(cli->buf + cli->len, read_buf, n);
-          cli->len += n;
-          cli->buf[cli->len] = '\0';
-        }
-        char *newline = strchr(cli->buf, '\n');
-        if (newline) {
-          *newline = '\0';
-          process_ipc_request(arena, jsonv_arena, context_val, cli->fd, cli->buf);
-          close(cli->fd);
-          *curr_cli = cli->next;
-          continue;
-        }
-      } else if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-        close(cli->fd);
-        *curr_cli = cli->next;
-        continue;
-      }
-      curr_cli = &(cli->next);
-    }
-
-    update_job_states(ast);
-
-    bool control_flow_progress = true;
-    while (control_flow_progress) {
-      control_flow_progress = false;
-      update_job_states(ast);
-
-      JobNode *job = ast->jobs_head;
-      while (job) {
-        if (job->execution_state == STATE_PENDING && is_ready(job)) {
-          bool job_is_res = job_has_resource(job);
-          if (job_is_res) {
-            bool active_running = false;
-            ActiveJob *curr_aj = active_jobs_head;
-            while (curr_aj) {
-              if (curr_aj->job->execution_state == STATE_RUNNING) {
-                active_running = true;
-                break;
-              }
-              curr_aj = curr_aj->next;
-            }
-            if (active_running) {
-              job = job->next_sorted;
-              continue;
-            }
-          } else {
-            bool resource_running = false;
-            ActiveJob *curr_aj = active_jobs_head;
-            while (curr_aj) {
-              if (curr_aj->job->execution_state == STATE_RUNNING && job_has_resource(curr_aj->job)) {
-                resource_running = true;
-                break;
-              }
-              curr_aj = curr_aj->next;
-            }
-            if (resource_running) {
-              job = job->next_sorted;
-              continue;
-            }
-          }
-          if (job->type == NODE_IF) {
-            job->execution_state = STATE_RUNNING;
-            Jsonv_Value eval_res = jsonv_val_undefined();
-            int32_t status = evaluate_expression(arena, job->spec.binary_if.condition, jsonv_arena, *context_val, &eval_res);
-            if (status != ERR_SUCCESS) {
-              job->execution_state = STATE_FAILED;
-              ret_val = status;
-              goto cleanup;
-            }
-
-            if (is_truthy(eval_res)) {
-              job->execution_state = STATE_SUCCEEDED;
-              for (size_t c = 0; c < job->spec.binary_if.else_count; c++) {
-                mark_job_skipped(ast, job->spec.binary_if.else_branch[c]);
-              }
-            } else {
-              job->execution_state = STATE_SUCCEEDED;
-              for (size_t c = 0; c < job->spec.binary_if.then_count; c++) {
-                mark_job_skipped(ast, job->spec.binary_if.then_branch[c]);
-              }
-            }
-            control_flow_progress = true;
-            break;
-          } else if (job->type == NODE_SWITCH) {
-            job->execution_state = STATE_RUNNING;
-            SwitchCase *sc = job->spec.multi_switch.cases;
-            bool matched = false;
-            while (sc) {
-              if (!matched) {
-                Jsonv_Value eval_res = jsonv_val_undefined();
-                int32_t status = evaluate_expression(arena, sc->condition, jsonv_arena, *context_val, &eval_res);
-                if (status == ERR_SUCCESS && is_truthy(eval_res)) {
-                  matched = true;
-                } else {
-                  for (size_t t = 0; t < sc->then_count; t++) {
-                    mark_job_skipped(ast, sc->then_branch[t]);
-                  }
-                }
-              } else {
-                for (size_t t = 0; t < sc->then_count; t++) {
-                  mark_job_skipped(ast, sc->then_branch[t]);
-                }
-              }
-              sc = sc->next;
-            }
-            if (matched) {
-              for (size_t d = 0; d < job->spec.multi_switch.default_count; d++) {
-                mark_job_skipped(ast, job->spec.multi_switch.default_branch[d]);
-              }
-            }
-            job->execution_state = STATE_SUCCEEDED;
-            control_flow_progress = true;
-            break;
-          } else if (job->type == NODE_FORK) {
-            job->execution_state = STATE_SUCCEEDED;
-            control_flow_progress = true;
-            break;
-          } else if (job->type == NODE_WAIT_SIGNAL) {
-            Jsonv_Value resolved_corr = jsonv_val_undefined();
-            int32_t status = evaluate_expression(arena, job->spec.wait_signal.correlation_id, jsonv_arena, *context_val, &resolved_corr);
-            if (status != ERR_SUCCESS) {
-              job->execution_state = STATE_FAILED;
-              ret_val = status;
-              goto cleanup;
-            }
-
-            Jsonv_Value incoming_corr = jsonv_val_undefined();
-            bool incoming_matched = false;
-            Jsonv_Value inputs_val;
-            if (jsonv_obj_get(context_val->as.p, "inputs", &inputs_val) && inputs_val.tag == JSONV_VAL_OBJ) {
-              if (jsonv_obj_get(inputs_val.as.p, "correlation_id", &incoming_corr)) {
-                if (jsonv_values_equal(resolved_corr, incoming_corr)) {
-                  incoming_matched = true;
-                }
-              }
-            }
-
-            if (incoming_matched) {
-              if (job->spec.wait_signal.steps_head) {
-                ActiveJob *aj = na_alloc(arena, sizeof(ActiveJob));
-                if (!aj) {
-                  ret_val = ERR_OOM;
-                  goto cleanup;
-                }
-                memset(aj, 0, sizeof(ActiveJob));
-                aj->local_vars.tag = JSONV_VAL_OBJ;
-                aj->local_vars.as.p = jsonv_obj_new(jsonv_arena, NULL);
-                aj->job = job;
-
-                aj->steps_state_obj.tag = JSONV_VAL_OBJ;
-                aj->steps_state_obj.as.p = jsonv_obj_new(jsonv_arena, NULL);
-                char *k_steps = allocate_jsonv_string(arena, "steps", 5);
-                jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
-
-                char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
-                Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
-                jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, aj->steps_state_obj);
-                Jsonv_Value jobs_val_obj;
-                char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
-                if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
-                  jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
-                }
-
-                StepNode *step = job->spec.wait_signal.steps_head;
-                Jsonv_Value jobs_obj;
-                if (jsonv_obj_get(context_val->as.p, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ) {
-                  Jsonv_Value job_entry;
-                  if (jsonv_obj_get(jobs_obj.as.p, job_id_cstr, &job_entry) && job_entry.tag == JSONV_VAL_OBJ) {
-                    Jsonv_Value steps_obj;
-                    if (jsonv_obj_get(job_entry.as.p, "steps", &steps_obj) && steps_obj.tag == JSONV_VAL_OBJ) {
-                      int slen = jsonv_obj_length(steps_obj.as.p);
-                      for (int s = 0; s < slen; s++) {
-                        const char *skey = jsonv_obj_key_at(steps_obj.as.p, s);
-                        Jsonv_Value sval = jsonv_obj_val_at(steps_obj.as.p, s);
-                        jsonv_obj_set(jsonv_arena, aj->steps_state_obj.as.p, skey, sval);
-                      }
-                      while (step) {
-                        char *step_id_cstr = sv_to_cstring(arena, step->id);
-                        Jsonv_Value dummy;
-                        if (!jsonv_obj_get(steps_obj.as.p, step_id_cstr, &dummy)) {
-                          break;
-                        }
-                        step = step->next;
-                      }
-                    }
-                  }
-                }
-
-                aj->curr_step = step;
-                aj->is_loop = false;
-
-                if (step == NULL) {
-                  job->execution_state = STATE_SUCCEEDED;
-                  char *k_status = allocate_jsonv_string(arena, "status", 6);
-                  jsonv_obj_set(jsonv_arena, job_outcome_obj, k_status, jsonv_val_str(allocate_jsonv_string(arena, "success", 7)));
-                  control_flow_progress = true;
-                } else {
-                  job->execution_state = STATE_RUNNING;
-                  aj->next = active_jobs_head;
-                  active_jobs_head = aj;
-                  push_local_vars(jsonv_arena, *context_val, aj->local_vars);
-                  evaluate_job_variables(arena, jsonv_arena, context_val, aj->job, aj->local_vars);
-                  int32_t status = advance_active_job(arena, jsonv_arena, ast, context_val, aj, transport);
-                  pop_local_vars(jsonv_arena, *context_val, aj->local_vars);
-                  if (status != ERR_SUCCESS) {
-                    ret_val = status;
-                    goto cleanup;
-                  }
-                }
-              } else {
-                char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
-                Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
-                char *k_status = allocate_jsonv_string(arena, "status", 6);
-                jsonv_obj_set(jsonv_arena, job_outcome_obj, k_status, jsonv_val_str(allocate_jsonv_string(arena, "success", 7)));
-                Jsonv_Value jobs_val_obj;
-                char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
-                if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
-                  jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
-                }
-                job->execution_state = STATE_SUCCEEDED;
-                control_flow_progress = true;
-              }
-            } else {
-              job->execution_state = STATE_SUSPENDED;
-              fprintf(stderr, "Workflow suspended at wait_signal job '%.*s'.\n", (int)job->id.length, job->id.data);
-              save_tfstate(arena, state_path, *context_val);
-              control_flow_progress = false;
-              ret_val = ERR_SUCCESS;
-              break;
-            }
-            break;
-          } else if (job->type == NODE_TRANSFORM) {
-            if (check_and_apply_cache(arena, jsonv_arena, ast, context_val, job, NULL)) {
-              control_flow_progress = true;
-              break;
-            }
-            job->execution_state = STATE_RUNNING;
-
-            Jsonv_Value local_vars;
-            local_vars.tag = JSONV_VAL_OBJ;
-            local_vars.as.p = jsonv_obj_new(jsonv_arena, NULL);
-            push_local_vars(jsonv_arena, *context_val, local_vars);
-            evaluate_job_variables(arena, jsonv_arena, context_val, job, local_vars);
-
-            Jsonv_Value transform_res = jsonv_val_undefined();
-            int32_t status = evaluate_expression(arena, job->spec.transform.expression, jsonv_arena, *context_val, &transform_res);
-            if (status != ERR_SUCCESS) {
-              pop_local_vars(jsonv_arena, *context_val, local_vars);
-              job->execution_state = STATE_FAILED;
-              ret_val = status;
-              goto cleanup;
-            }
-
-            char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
-            Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
-            char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
-            jsonv_obj_set(jsonv_arena, job_outcome_obj, k_outputs, transform_res);
-            char *k_output = allocate_jsonv_string(arena, "output", 6);
-            jsonv_obj_set(jsonv_arena, job_outcome_obj, k_output, transform_res);
-            char *k_result = allocate_jsonv_string(arena, "result", 6);
-            jsonv_obj_set(jsonv_arena, job_outcome_obj, k_result, transform_res);
-
-            Jsonv_Value jobs_val_obj;
-            char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
-            if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
-              jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
-            }
-
-            evaluate_job_variables(arena, jsonv_arena, context_val, job, local_vars);
-
-            pop_local_vars(jsonv_arena, *context_val, local_vars);
-
-            job->execution_state = STATE_SUCCEEDED;
-            store_job_in_cache(arena, ast, *context_val, job, NULL);
-            control_flow_progress = true;
-            break;
-          } else if (job->type == NODE_EXPORT) {
-            job->execution_state = STATE_RUNNING;
-
-            Jsonv_Value local_vars;
-            local_vars.tag = JSONV_VAL_OBJ;
-            local_vars.as.p = jsonv_obj_new(jsonv_arena, NULL);
-            push_local_vars(jsonv_arena, *context_val, local_vars);
-            evaluate_job_variables(arena, jsonv_arena, context_val, job, local_vars);
-
-            // 1. Evaluate file path
-            StringView resolved_file_path = {0};
-            int32_t status = resolve_string(arena, job->spec.export_node.file_path, jsonv_arena, *context_val, &resolved_file_path);
-            if (status != ERR_SUCCESS) {
-              pop_local_vars(jsonv_arena, *context_val, local_vars);
-              job->execution_state = STATE_FAILED;
-              ret_val = status;
-              goto cleanup;
-            }
-            char *file_path_cstr = allocate_jsonv_string(arena, resolved_file_path.data, resolved_file_path.length);
-
-            // 2. Evaluate data
-            Jsonv_Value data_res = resolve_json_value(arena, job->spec.export_node.data_val, jsonv_arena, *context_val);
-            if (data_res.tag == JSONV_VAL_UNDEFINED) {
-              pop_local_vars(jsonv_arena, *context_val, local_vars);
-              job->execution_state = STATE_FAILED;
-              ret_val = ERR_MISSING_VAR;
-              goto cleanup;
-            }
-
-            // 3. Serialize and write to file
-            char *serialized_data = NULL;
-            serialize_jsonv_value(arena, data_res, &serialized_data);
-            if (serialized_data && file_path_cstr) {
-              FILE *f = fopen(file_path_cstr, "w");
-              if (f) {
-                fputs(serialized_data, f);
-                fclose(f);
-              } else {
-                pop_local_vars(jsonv_arena, *context_val, local_vars);
-                job->execution_state = STATE_FAILED;
-                ret_val = ERR_HTTP_TRANSPORT;
-                goto cleanup;
-              }
-            }
-
-            // 4. Update outcome
-            char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
-            Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
-            char *k_status = allocate_jsonv_string(arena, "status", 6);
-            jsonv_obj_set(jsonv_arena, job_outcome_obj, k_status, jsonv_val_str(allocate_jsonv_string(arena, "success", 7)));
-            
-            Jsonv_Value jobs_val_obj;
-            char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
-            if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
-              jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
-            }
-
-            pop_local_vars(jsonv_arena, *context_val, local_vars);
-            job->execution_state = STATE_SUCCEEDED;
-            control_flow_progress = true;
-            break;
-          }
-        }
-        job = job->next_sorted;
-      }
-    }
-
-    // Check if any exit/end job has succeeded
-    JobNode *exit_job = NULL;
-    JobNode *jc = ast->jobs_head;
-    while (jc) {
-      if (jc->execution_state == STATE_SUCCEEDED && (jc->is_end || jc->return_expr.length > 0)) {
-        exit_job = jc;
-        break;
-      }
-      jc = jc->next_sorted;
-    }
-
-    if (exit_job) {
-      Jsonv_Value evaluated_out = jsonv_val_undefined();
-      if (exit_job->return_expr.length > 0) {
-        StringView expr = exit_job->return_expr;
-        // Trim leading whitespace
-        while (expr.length > 0 && (expr.data[0] == ' ' || expr.data[0] == '\t' || expr.data[0] == '\n' || expr.data[0] == '\r')) {
-          expr.data++;
-          expr.length--;
-        }
-        if (expr.length > 0 && (expr.data[0] == '{' || expr.data[0] == '[')) {
-          // Parse JSON structure
-          char *json_cstr = na_alloc(arena, expr.length + 1);
-          if (json_cstr) {
-            memcpy(json_cstr, expr.data, expr.length);
-            json_cstr[expr.length] = '\0';
-
-            Jsonv_Config config = {0};
-            config.default_block_size = 4096;
-            config.max_limit = 16 * 1024 * 1024;
-            config.max_depth = 128;
-            config.max_values = 10000;
-            config.max_objects = 5000;
-            config.max_array = 5000;
-            config.max_string_bytes = 4 * 1024 * 1024;
-
-            Jsonv_Arena_Error parser_err = 0;
-            Jsonv_Context *tmp_ctx = jsonv_ctx_new(jsonv_arena, &config, &parser_err);
-            if (tmp_ctx) {
-              if (jsonv_ctx_parse_yaml_data(tmp_ctx, (const unsigned char *)json_cstr) ||
-                  jsonv_ctx_parse_data(tmp_ctx, (const unsigned char *)json_cstr)) {
-                Jsonv_Value parsed_val;
-                if (jsonv_ctx_get_value(tmp_ctx, &parsed_val)) {
-                  evaluated_out = resolve_json_value(arena, parsed_val, jsonv_arena, *context_val);
-                }
-              }
-            }
-          }
-        } else {
-          int32_t status = evaluate_expression(arena, expr, jsonv_arena, *context_val, &evaluated_out);
-          if (status != ERR_SUCCESS) {
-            ret_val = status;
-            goto cleanup;
-          }
-        }
-      } else {
-        // "return" is not defined, use job outputs
-        Jsonv_Value jobs_val_obj;
-        char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
-        if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
-          char *job_id_cstr = allocate_jsonv_string(arena, exit_job->id.data, exit_job->id.length);
-          Jsonv_Value job_outcome_val;
-          if (jsonv_obj_get(jobs_val_obj.as.p, job_id_cstr, &job_outcome_val) && job_outcome_val.tag == JSONV_VAL_OBJ) {
-            char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
-            Jsonv_Value job_outputs_val;
-            if (jsonv_obj_get(job_outcome_val.as.p, k_outputs, &job_outputs_val)) {
-              evaluated_out = job_outputs_val;
-            }
-          }
-        }
-      }
-
-      // Bind evaluated value to a top-level "outputs" key
-      char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
-      jsonv_obj_set(jsonv_arena, context_val->as.p, k_outputs, evaluated_out);
-
-      ret_val = ERR_SUCCESS;
-      goto cleanup;
-    }
-
-    JobNode *job = ast->jobs_head;
-    while (job) {
-      if (job->execution_state == STATE_PENDING && is_ready(job)) {
-        if (ast->max_concurrency > 0) {
-          int running_jobs = 0;
-          ActiveJob *curr_aj = active_jobs_head;
-          while (curr_aj) {
-            running_jobs++;
-            curr_aj = curr_aj->next;
-          }
-          if (running_jobs >= ast->max_concurrency) {
-            break;
-          }
-        }
-        ActiveJob temp_aj;
-        memset(&temp_aj, 0, sizeof(ActiveJob));
-        if (job->type == NODE_TASK) {
-          if (check_and_apply_cache(arena, jsonv_arena, ast, context_val, job, &temp_aj)) {
-            control_flow_progress = true;
-            break;
-          }
-        }
-
-        if (job->type == NODE_TASK || job->type == NODE_LOOP || job->type == NODE_WAIT_TIMER) {
-          ActiveJob *aj = na_alloc(arena, sizeof(ActiveJob));
-          if (!aj) {
-            ret_val = ERR_OOM;
-            goto cleanup;
-          }
-          memset(aj, 0, sizeof(ActiveJob));
-          aj->local_vars.tag = JSONV_VAL_OBJ;
-          aj->local_vars.as.p = jsonv_obj_new(jsonv_arena, NULL);
-          aj->job = job;
-
-          if (job->type == NODE_TASK) {
-            if (temp_aj.is_validating) {
-              aj->is_validating = true;
-              strcpy(aj->cached_key, temp_aj.cached_key);
-              strcpy(aj->cached_etag, temp_aj.cached_etag);
-              strcpy(aj->cached_last_modified, temp_aj.cached_last_modified);
-              aj->cached_output_payload = temp_aj.cached_output_payload;
-
-              if (aj->cached_etag[0] != '\0') {
-                char *k_cache_etag = allocate_jsonv_string(arena, "_cache_etag", 11);
-                jsonv_obj_set(jsonv_arena, context_val->as.p, k_cache_etag, jsonv_val_str(allocate_jsonv_string(arena, aj->cached_etag, strlen(aj->cached_etag))));
-              }
-              if (aj->cached_last_modified[0] != '\0') {
-                char *k_cache_lm = allocate_jsonv_string(arena, "_cache_last_modified", 20);
-                jsonv_obj_set(jsonv_arena, context_val->as.p, k_cache_lm, jsonv_val_str(allocate_jsonv_string(arena, aj->cached_last_modified, strlen(aj->cached_last_modified))));
-              }
-            }
-
-             aj->steps_state_obj.tag = JSONV_VAL_OBJ;
-             aj->steps_state_obj.as.p = jsonv_obj_new(jsonv_arena, NULL);
-             char *k_steps = allocate_jsonv_string(arena, "steps", 5);
-             jsonv_obj_set(jsonv_arena, context_val->as.p, k_steps, aj->steps_state_obj);
-
-             char *job_id_cstr = allocate_jsonv_string(arena, job->id.data, job->id.length);
-             Jsonv_Obj *job_outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
-             jsonv_obj_set(jsonv_arena, job_outcome_obj, k_steps, aj->steps_state_obj);
-             Jsonv_Value jobs_val_obj;
-             char *k_jobs = allocate_jsonv_string(arena, "jobs", 4);
-             if (jsonv_obj_get(context_val->as.p, k_jobs, &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
-               jsonv_obj_set(jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
-             }
-
-            StepNode *step = job->spec.task.steps_head;
-            Jsonv_Value jobs_obj;
-            if (jsonv_obj_get(context_val->as.p, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ) {
-              Jsonv_Value job_entry;
-              char *job_id_cstr = sv_to_cstring(arena, job->id);
-              if (jsonv_obj_get(jobs_obj.as.p, job_id_cstr, &job_entry) && job_entry.tag == JSONV_VAL_OBJ) {
-                Jsonv_Value steps_obj;
-                if (jsonv_obj_get(job_entry.as.p, "steps", &steps_obj) && steps_obj.tag == JSONV_VAL_OBJ) {
-                  int slen = jsonv_obj_length(steps_obj.as.p);
-                  for (int s = 0; s < slen; s++) {
-                    const char *skey = jsonv_obj_key_at(steps_obj.as.p, s);
-                    Jsonv_Value sval = jsonv_obj_val_at(steps_obj.as.p, s);
-                    jsonv_obj_set(jsonv_arena, aj->steps_state_obj.as.p, skey, sval);
-                  }
-                  while (step) {
-                    char *step_id_cstr = sv_to_cstring(arena, step->id);
-                    Jsonv_Value dummy;
-                    if (!jsonv_obj_get(steps_obj.as.p, step_id_cstr, &dummy)) {
-                      break;
-                    }
-                    step = step->next;
-                  }
-                }
-              }
-            }
-            aj->curr_step = step;
-            aj->is_loop = false;
-          } else if (job->type == NODE_LOOP) {
-            aj->is_loop = true;
-            aj->max_iterations = job->spec.loop_node.max_iterations;
-            if (aj->max_iterations == 0) {
-              aj->max_iterations = 1000;
-            }
-            aj->loop_iter = 0;
-            int32_t status = start_loop_iteration(arena, jsonv_arena, context_val, aj);
-            if (status != ERR_SUCCESS) {
-              ret_val = status;
-              goto cleanup;
-            }
-          } else if (job->type == NODE_WAIT_TIMER) {
-            aj->is_loop = false;
-            StringView resolved_dur;
-            resolve_string(arena, job->spec.wait_timer.duration, jsonv_arena, *context_val, &resolved_dur);
-            long duration_ms = parse_duration_ms(resolved_dur);
-            struct timeval now;
-            gettimeofday(&now, NULL);
-            long sec = duration_ms / 1000;
-            long usec = (duration_ms % 1000) * 1000;
-            aj->next_retry_time.tv_sec = now.tv_sec + sec;
-            aj->next_retry_time.tv_usec = now.tv_usec + usec;
-            if (aj->next_retry_time.tv_usec >= 1000000) {
-              aj->next_retry_time.tv_sec++;
-              aj->next_retry_time.tv_usec -= 1000000;
-            }
-            aj->is_waiting_retry = true;
-          }
-
-          job->execution_state = STATE_RUNNING;
-          push_local_vars(jsonv_arena, *context_val, aj->local_vars);
-          evaluate_job_variables(arena, jsonv_arena, context_val, aj->job, aj->local_vars);
-          int32_t status = advance_active_job(arena, jsonv_arena, ast, context_val, aj, transport);
-          pop_local_vars(jsonv_arena, *context_val, aj->local_vars);
-          if (status != ERR_SUCCESS) {
-            ret_val = status;
-            goto cleanup;
-          }
-
-          if (job->execution_state == STATE_RUNNING) {
-            aj->next = active_jobs_head;
-            active_jobs_head = aj;
-          }
-        } else if (job->type == NODE_IF || job->type == NODE_SWITCH || job->type == NODE_FORK ||
-                   job->type == NODE_JOIN || job->type == NODE_WAIT_SIGNAL || job->type == NODE_TRANSFORM ||
-                   job->type == NODE_EXPORT) {
-          job = job->next_sorted;
-          continue;
-        } else {
-          job->execution_state = STATE_FAILED;
-          ret_val = ERR_CLI_UNSUPPORTED_BLOCKING_NODE;
-          goto cleanup;
-        }
-      }
-      job = job->next_sorted;
-    }
-
-    ActiveJob **curr_ptr = &active_jobs_head;
-    while (*curr_ptr) {
-      ActiveJob *aj = *curr_ptr;
-      if (aj->job->execution_state != STATE_RUNNING) {
-        if (aj->loop_arena) {
-          arena_destroy(aj->loop_arena);
-          aj->loop_arena = NULL;
-        }
-        *curr_ptr = aj->next;
-      } else {
-        curr_ptr = &(aj->next);
-      }
-    }
-
-    bool active_remaining = false;
-    if (active_jobs_head != NULL) {
-      active_remaining = true;
-    } else {
-      JobNode *j = ast->jobs_head;
-      while (j) {
-        if (j->execution_state == STATE_PENDING) {
-          active_remaining = true;
-          break;
-        }
-        j = j->next_sorted;
-      }
-    }
-
-    if (!active_remaining) break;
-
-    // Tick and trigger scheduled retries
-    ActiveJob *aj_retry = active_jobs_head;
-    while (aj_retry) {
-      if (aj_retry->is_waiting_retry) {
-        struct timeval now;
-        gettimeofday(&now, NULL);
-        if (now.tv_sec > aj_retry->next_retry_time.tv_sec ||
-            (now.tv_sec == aj_retry->next_retry_time.tv_sec && now.tv_usec >= aj_retry->next_retry_time.tv_usec)) {
-          aj_retry->is_waiting_retry = false;
-          push_local_vars(jsonv_arena, *context_val, aj_retry->local_vars);
-          int32_t status = advance_active_job(arena, jsonv_arena, ast, context_val, aj_retry, transport);
-          pop_local_vars(jsonv_arena, *context_val, aj_retry->local_vars);
-          if (status != ERR_SUCCESS) {
-            ret_val = status;
-            goto cleanup;
-          }
-        }
-      }
-      aj_retry = aj_retry->next;
-    }
-
-    int still_running = 0;
-    transport->ops->poll_requests(transport, &still_running);
-
-    ActiveJob *aj_http = active_jobs_head;
-    while (aj_http) {
-      if (aj_http->easy_handle) {
-        push_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-        long status_code = 0;
-        bool completed = false;
-        bool error = false;
-        int32_t status = transport->ops->check_completed(transport, arena, jsonv_arena, aj_http->easy_handle, &aj_http->resp_buf, &status_code, &completed, &error);
-        if (status == ERR_SUCCESS && completed) {
-          if (!error) {
-            Arena *eff_arena = aj_http->loop_arena ? aj_http->loop_arena : arena;
-            if (status_code >= 400 && handle_step_failure(eff_arena, jsonv_arena, context_val, aj_http, "HTTP status >= 400")) {
-              transport->ops->cleanup_request(transport, aj_http->easy_handle);
-              aj_http->easy_handle = NULL;
-              pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-              aj_http = aj_http->next;
-              continue;
-            }
-            if (status_code >= 400 && aj_http->curr_step->has_on_error) {
-              transport->ops->cleanup_request(transport, aj_http->easy_handle);
-              aj_http->easy_handle = NULL;
-              int32_t comp_status = apply_step_fallback(arena, jsonv_arena, context_val, aj_http, ast, transport);
-              if (comp_status != ERR_SUCCESS) {
-                pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-                ret_val = comp_status;
-                goto cleanup;
-              }
-              pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-              aj_http = aj_http->next;
-              continue;
-            }
-            int32_t comp_status = complete_http_step_async(arena, jsonv_arena, aj_http, status_code);
-            if (comp_status != ERR_SUCCESS) {
-              pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-              ret_val = comp_status;
-              goto cleanup;
-            }
-            if (status_code >= 400) {
-              aj_http->job->execution_state = STATE_FAILED;
-            }
-          } else {
-            Arena *eff_arena = aj_http->loop_arena ? aj_http->loop_arena : arena;
-            if (handle_step_failure(eff_arena, jsonv_arena, context_val, aj_http, "HTTP transport error")) {
-              transport->ops->cleanup_request(transport, aj_http->easy_handle);
-              aj_http->easy_handle = NULL;
-              pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-              aj_http = aj_http->next;
-              continue;
-            }
-            if (aj_http->curr_step->has_on_error) {
-              transport->ops->cleanup_request(transport, aj_http->easy_handle);
-              aj_http->easy_handle = NULL;
-              int32_t comp_status = apply_step_fallback(arena, jsonv_arena, context_val, aj_http, ast, transport);
-              if (comp_status != ERR_SUCCESS) {
-                pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-                ret_val = comp_status;
-                goto cleanup;
-              }
-              pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-              aj_http = aj_http->next;
-              continue;
-            }
-            aj_http->job->execution_state = STATE_FAILED;
-          }
-
-          transport->ops->cleanup_request(transport, aj_http->easy_handle);
-          aj_http->easy_handle = NULL;
-          aj_http->curr_step_retry_attempt = 0;
-
-          // Re-evaluate job variables since step outcomes changed
-          evaluate_job_variables(arena, jsonv_arena, context_val, aj_http->job, aj_http->local_vars);
-
-          aj_http->curr_step = aj_http->curr_step->next;
-
-          int32_t adv_status = advance_active_job(arena, jsonv_arena, ast, context_val, aj_http, transport);
-          if (adv_status != ERR_SUCCESS) {
-            pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-            ret_val = adv_status;
-            goto cleanup;
-          }
-        }
-        pop_local_vars(jsonv_arena, *context_val, aj_http->local_vars);
-      }
-      aj_http = aj_http->next;
-    }
-
-    // Poll and read from active child processes (plugins)
-    ActiveJob *aj_proc = active_jobs_head;
-    while (aj_proc) {
-      if (aj_proc->plugin_exec.child_pid != 0) {
-        push_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
-        bool finished = false;
-        long exit_code = 0;
-        Arena *eff_arena = aj_proc->loop_arena ? aj_proc->loop_arena : arena;
-
-        plugin_poll(&aj_proc->plugin_exec, eff_arena, jsonv_arena, context_val, aj_proc->curr_step, &finished, &exit_code);
-        if (finished) {
-          if (exit_code == -4) { // Timeout
-            if (handle_step_failure(eff_arena, jsonv_arena, context_val, aj_proc, "Plugin timeout")) {
-              pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
-              aj_proc = aj_proc->next;
-              continue;
-            }
-            if (aj_proc->curr_step->has_on_error) {
-              int32_t comp_status = apply_step_fallback(arena, jsonv_arena, context_val, aj_proc, ast, transport);
-              if (comp_status != ERR_SUCCESS) {
-                pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
-                ret_val = comp_status;
-                goto cleanup;
-              }
-              pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
-              aj_proc = aj_proc->next;
-              continue;
-            }
-            complete_plugin_step_async(arena, jsonv_arena, aj_proc, -4);
-            aj_proc->job->execution_state = STATE_FAILED;
-          } else { // Exited
-            if (exit_code != 0 && handle_step_failure(eff_arena, jsonv_arena, context_val, aj_proc, "Plugin exited with non-zero code")) {
-              pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
-              aj_proc = aj_proc->next;
-              continue;
-            }
-            if (exit_code != 0 && aj_proc->curr_step->has_on_error) {
-              int32_t comp_status = apply_step_fallback(arena, jsonv_arena, context_val, aj_proc, ast, transport);
-              if (comp_status != ERR_SUCCESS) {
-                pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
-                ret_val = comp_status;
-                goto cleanup;
-              }
-              pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
-              aj_proc = aj_proc->next;
-              continue;
-            }
-            complete_plugin_step_async(arena, jsonv_arena, aj_proc, exit_code);
-            aj_proc->curr_step_retry_attempt = 0;
-
-            evaluate_job_variables(arena, jsonv_arena, context_val, aj_proc->job, aj_proc->local_vars);
-
-            aj_proc->curr_step = aj_proc->curr_step->next;
-
-            int32_t adv_status = advance_active_job(arena, jsonv_arena, ast, context_val, aj_proc, transport);
-            if (adv_status != ERR_SUCCESS) {
-              pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
-              ret_val = adv_status;
-              goto cleanup;
-            }
-          }
-        }
-        pop_local_vars(jsonv_arena, *context_val, aj_proc->local_vars);
-      }
-      aj_proc = aj_proc->next;
-    }
-
-    usleep(1000);
+  NVMContext nvm_ctx;
+  int32_t init_res = nvm_init_from_file(&nvm_ctx, arena, jsonv_arena, temp_nbc_path);
+  if (init_res != ERR_SUCCESS) {
+    unlink(temp_nbc_path);
+    release_state_lock(lock_path);
+    return init_res;
   }
 
-  JobNode *j = ast->jobs_head;
-  while (j) {
-    if (j->execution_state == STATE_FAILED) {
-      ret_val = ERR_HTTP_TRANSPORT;
-      goto cleanup;
-    }
-    j = j->next_sorted;
-  }
+  nvm_ctx.ast = ast;
+  nvm_ctx.context_val = context_val;
+  nvm_ctx.transport = transport;
 
-  ret_val = ERR_SUCCESS;
+  ret_val = nvm_execute_loop(&nvm_ctx);
 
-cleanup:
-  set_global_ac_root(NULL);
-  ActiveJob *aj_cleanup = active_jobs_head;
-  while (aj_cleanup) {
-    if (aj_cleanup->loop_arena) {
-      arena_destroy(aj_cleanup->loop_arena);
-      aj_cleanup->loop_arena = NULL;
-    }
-    if (aj_cleanup->easy_handle) {
-      transport->ops->cleanup_request(transport, aj_cleanup->easy_handle);
-    }
-    plugin_cleanup(&aj_cleanup->plugin_exec);
-    aj_cleanup = aj_cleanup->next;
-  }
-  IPCClient *cli_c = ipc_clients_head;
-  while (cli_c) {
-    close(cli_c->fd);
-    cli_c = cli_c->next;
-  }
-  if (ipc_listen_fd >= 0) {
-    close(ipc_listen_fd);
-  }
-  if (ast->ipc_socket_path[0] != '\0') {
-    unlink(ast->ipc_socket_path);
-  }
+  nvm_close(&nvm_ctx);
+  unlink(temp_nbc_path);
+
   bool has_suspended = false;
   JobNode *js = ast->jobs_head;
   while (js) {
@@ -3315,6 +2421,9 @@ cleanup:
     unlink(state_path);
   } else {
     save_tfstate(arena, state_path, *context_val);
+  }
+  if (ret_val != ERR_SUCCESS) {
+    fprintf(stderr, "DEBUG: run_workflow_opt returning error %d\n", ret_val);
   }
   release_state_lock(lock_path);
 
