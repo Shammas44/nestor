@@ -66,18 +66,31 @@ This document tracks the current completion status of stages outlined in the [RO
 
 ---
 
-## Phase 2: Full Nestor VM (NVM) Implementation (Next Milestone)
+## Phase 2: Full Nestor VM (NVM) Implementation
 
-*   [ ] **Stage 17: VM Opcode Completeness**
-*   [ ] **Stage 17.5: Direct VM I/O & Plugin Bridges**
-*   [ ] **Stage 18: Stack-Frame Scoped Variables & Memory Compaction**
-*   [ ] **Stage 18.5: SQLite Caching & Locking in NVM**
-*   [ ] **Stage 19: NVM State Serialization & Resuming**
+*   [x] **Stage 17: VM Opcode Completeness**
+*   [x] **Stage 17.5: Direct VM I/O & Plugin Bridges**
+*   [x] **Stage 18: Stack-Frame Scoped Variables & Memory Compaction**
+*   [x] **Stage 18.5: SQLite Caching & Locking in NVM**
+*   [x] **Stage 19: NVM State Serialization & Resuming**
+
+---
+
+## Phase 2.5: Low-Level Bytecode & Hermetic Plugin VM (Next Milestone)
+
+*   [ ] **Stage 20: Low-Level Bytecode Transition**
+    *   [ ] Compile nested workflows, loops, conditions, and joins to primitive jump, branch, fork, and join instructions.
+    *   [ ] Fully decouple the VM interpreter from AST node dependency.
+*   [ ] **Stage 21: Cryptographic Binary Signing**
+    *   [ ] Implement Ed25519 signature creation in the compiler and verification checking at NVM header loading.
+*   [ ] **Stage 22: Unified Plugin Architecture**
+    *   [ ] Modularize caching, state persistence, redaction, and transport layers as hot-swappable VM plugins.
+*   [ ] **Stage 23: Disassembly Tooling (`nestor-dis`)**
+    *   [ ] Develop the assembly representation tool to print compiled instruction listings.
 
 ---
 
 ## Phase 3: Gateway Daemon & Business APIs (Stateful Server)
 
-*   [ ] **Stage 20: Gateway Daemon & HTTP REST Mapping**
-*   [ ] **Stage 21: Webhook Routing & Correlation Resuming**
-
+*   [ ] **Stage 24: Gateway Daemon & HTTP REST Mapping**
+*   [ ] **Stage 25: Webhook Routing & Correlation Resuming**
