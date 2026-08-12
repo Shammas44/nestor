@@ -462,3 +462,50 @@ void plugin_cleanup(PluginExecutor *pe) {
   pe->child_stderr_fd = -1;
   /*#endregion*/
 }
+
+int32_t plugin_load_dynamic(const char *name, NestorPluginAPI *out_api) {
+  /*#region*/
+  if (!name || !out_api) return -1;
+  
+  char path[512];
+  snprintf(path, sizeof(path), "./plugins/%s.so", name);
+  void *lib_handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+  if (!lib_handle) {
+    snprintf(path, sizeof(path), "./plugins/%s.dylib", name);
+    lib_handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+  }
+  if (!lib_handle) {
+    snprintf(path, sizeof(path), "/usr/local/share/nestor/plugins/%s.so", name);
+    lib_handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!lib_handle) {
+      snprintf(path, sizeof(path), "/usr/local/share/nestor/plugins/%s.dylib", name);
+      lib_handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    }
+  }
+  if (!lib_handle) return -1;
+
+  int32_t (*register_fn)(const NestorHostAPI*, NestorPluginAPI*) = 
+    (int32_t (*)(const NestorHostAPI*, NestorPluginAPI*))dlsym(lib_handle, "nestor_plugin_register");
+  if (!register_fn) {
+    dlclose(lib_handle);
+    return -1;
+  }
+
+  static NestorHostAPI host_api = {
+    .alloc = host_alloc,
+    .log = host_log,
+    .get_variable = host_get_variable,
+    .set_output = host_set_output
+  };
+
+  int32_t rc = register_fn(&host_api, out_api);
+  if (rc == 0) {
+    if (out_api->init) {
+      out_api->init(&host_api);
+    }
+    return 0;
+  }
+  dlclose(lib_handle);
+  return -1;
+  /*#endregion*/
+}

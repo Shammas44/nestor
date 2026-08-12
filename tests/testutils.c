@@ -1,6 +1,7 @@
 #include "testutils.h"
 #include <criterion/criterion.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 /* ---------- timing helpers ---------- */
 
@@ -36,4 +37,11 @@ void test_fini(void) {
     cr_log_warn("Slow test: %.3f ms [%s]", elapsed / 1.0e6,
                 current_test_name ? current_test_name : "unknown");
   }
+}
+
+__attribute__((constructor))
+static void set_global_timeout(void) {
+  /*#region*/
+  setenv("CRITERION_TIMEOUT", "10", 1);
+  /*#endregion*/
 }

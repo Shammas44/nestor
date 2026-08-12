@@ -78,15 +78,15 @@ This document tracks the current completion status of stages outlined in the [RO
 
 ## Phase 2.5: Low-Level Bytecode & Hermetic Plugin VM (Next Milestone)
 
-*   [ ] **Stage 20: Low-Level Bytecode Transition**
-    *   [ ] Compile nested workflows, loops, conditions, and joins to primitive jump, branch, fork, and join instructions.
-    *   [ ] Fully decouple the VM interpreter from AST node dependency.
-*   [ ] **Stage 21: Cryptographic Binary Signing**
-    *   [ ] Implement Ed25519 signature creation in the compiler and verification checking at NVM header loading.
-*   [ ] **Stage 22: Unified Plugin Architecture**
-    *   [ ] Modularize caching, state persistence, redaction, and transport layers as hot-swappable VM plugins.
-*   [ ] **Stage 23: Disassembly Tooling (`nestor-dis`)**
-    *   [ ] Develop the assembly representation tool to print compiled instruction listings.
+*   [x] **Stage 20: Low-Level Bytecode Transition**
+    *   [x] Compile nested workflows, loops, conditions, and joins to primitive jump, branch, fork, and join instructions.
+    *   [x] Fully decouple the VM interpreter from AST node dependency.
+*   [x] **Stage 21: Cryptographic Binary Signing**
+    *   [x] Implement Ed25519 signature creation in the compiler and verification checking at NVM header loading.
+*   [x] **Stage 22: Unified Plugin Architecture**
+    *   [x] Modularize caching, state persistence, redaction, and transport layers as hot-swappable VM plugins.
+*   [x] **Stage 23: Disassembly Tooling (`nestor-dis`)**
+    *   [x] Develop the assembly representation tool to print compiled instruction listings.
 
 ---
 

@@ -62,7 +62,7 @@ INSTALL_LIB_DIR := $(PREFIX)/lib
 INSTALL_INCLUDE_DIR := $(PREFIX)/include/$(PROJECT_NAME)
 
 # --- Source Files and Objects ---
-SRC_FILES := $(shell find $(SRC_DIR) -type f -name "*.c" ! -name "plugin_runner.c")
+SRC_FILES := $(shell find $(SRC_DIR) -type f -name "*.c" ! -name "plugin_runner.c" ! -name "disassembler.c")
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRC_FILES))
 TEST_SRC_FILES := $(wildcard $(TEST_DIR)/*.c)
 TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test_%.o,$(TEST_SRC_FILES))
@@ -108,7 +108,7 @@ TEST_APP_E2E := $(BIN_DIR)/test_runner_e2e
 .PHONY: all static shared test test_unit test_e2e main_d run run_test run_test_unit run_test_e2e clean install uninstall bear dirs main run_d inspect
 
 # --- Main Targets ---
-all: static main plugins/mock_plugin plugins/test_dynamic_plugin.so bin/nestor-plugin-runner test_unit test_e2e
+all: static main plugins/mock_plugin plugins/test_dynamic_plugin.so bin/nestor-plugin-runner bin/nestor-dis test_unit test_e2e
 
 bear: clean dirs
 	@echo "Generating compile_commands.json..."
@@ -179,7 +179,15 @@ bin/nestor-plugin-runner: $(OBJ_DIR)/plugin_runner.o $(LIB_DIR)/lib$(PROJECT_NAM
 	@echo "[CC] Linking $@"
 	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
+bin/nestor-dis: $(OBJ_DIR)/disassembler.o $(LIB_DIR)/lib$(PROJECT_NAME).a | dirs
+	@echo "[CC] Linking $@"
+	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LINK_USER_SHARED_LIBS)
+
 $(OBJ_DIR)/plugin_runner.o: src/plugin_runner.c | dirs
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) $(INC_FLAGS) -c $< -o $@
+
+$(OBJ_DIR)/disassembler.o: src/disassembler.c | dirs
 	@echo "[CC] $<"
 	@$(CC) $(CFLAGS) $(INC_FLAGS) -c $< -o $@
 

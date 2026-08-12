@@ -30,7 +30,7 @@ bin/main plan <workspace_directory>
 ```
 
 ### 3. Bytecode Compilation (`compile`)
-Compiles a scenario workspace into a single serialized binary bytecode file (`.nbc`) containing the constant pool and graph VM instructions:
+Compiles a scenario workspace into a single serialized, hermetic binary bytecode file (`.nbc`) containing the Constant Pool, the Workflow Table (embedding the serialized YAML/JSON metadata configuration), and signed graph VM instructions:
 ```bash
 bin/main compile <workspace_directory> -o output.nbc
 ```
@@ -40,6 +40,14 @@ Loads and executes a pre-compiled bytecode file on the Nestor Virtual Machine (N
 ```bash
 bin/main apply output.nbc
 ```
+*   **Decoupled & Hermetic**: The VM extracts the workflow schema configuration directly from the `.nbc` file at startup to reconstruct the execution graph. No YAML or JSON source files are required at runtime.
+
+### 5. Bytecode Disassembly (`nestor-dis`)
+Inspects compiled binary files to display metadata, constants, and decoded instructions:
+```bash
+bin/nestor-dis output.nbc
+```
+This utility validates the binary's cryptographic signature, dumps the Constant Pool, and prints code segments in a clean, offset-indexed assembly representation showing opcodes and operands (e.g. `OP_CALL_PROVIDER`, `OP_JUMP`, `OP_RETURN`).
 
 
 ---
@@ -617,3 +625,35 @@ operations:
       charge_id: "body.id"
       status: "body.status"
 ```
+
+---
+
+## 11. Security & Cryptographic Binary Signing
+
+Nestor ensures execution security by verifying binary files before they run:
+*   **Ed25519 Signatures**: Every compiled `.nbc` file contains a 64-byte Ed25519 signature in its header. The compiler signs the binary with a private key during the compilation phase.
+*   **Validation Gate**: The NVM loader validates this signature using the host public key at startup. 
+*   **Public Key Configuration**:
+    *   By default, the engine uses the built-in development public key.
+    *   To set a custom production public key, export the `NESTOR_PUBLIC_KEY` environment variable as a 64-character hex-encoded string:
+        ```bash
+        export NESTOR_PUBLIC_KEY="01461d966374aa5682df58ece37276b59f764c5e94e9b665be9fd4bee4af1a01"
+        ```
+*   **Execution Safety**: If signature verification fails (indicating the file was corrupted, modified, or signed with an untrusted key), Nestor aborts immediately with `ERR_VM_ILLEGAL_INSTRUCTION` (`-10`).
+
+---
+
+## 12. Hot-Swappable Plugin Architecture
+
+Core engine systems and third-party integration runners conform to the unified `NestorPluginAPI` (defined in `src/include/nestor_plugin.h`). This modularity makes them hot-swappable at runtime:
+*   **Dynamic Loading**: At engine startup, Nestor searches the `./plugins/` directory (and system path `/usr/local/share/nestor/plugins/`) for shared libraries (e.g. `plugins/http.so`, `plugins/cache.so`, `plugins/custom_plugin.so`).
+*   **Interface Resolution**: If a matching shared library is found, the engine calls `dlopen()` to dynamically resolve `nestor_plugin_register` and swap out the static built-in system with the dynamic implementation.
+*   **Plugin API Structure**:
+    ```c
+    typedef struct {
+      int32_t (*init)(const NestorHostAPI *host);
+      int32_t (*execute)(void *arena_ptr, void *ctx_ptr, const char *args_json);
+      void    (*shutdown)(void);
+    } NestorPluginAPI;
+    ```
+

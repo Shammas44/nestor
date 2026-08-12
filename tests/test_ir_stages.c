@@ -105,6 +105,76 @@ Test(ir_stage11_5_and_11_7, bytecode_compiler_and_nvm_execution) {
   arena_destroy(arena);
 }
 
+Test(ir_stage21, bytecode_signature_verification) {
+  /*#region*/
+  Arena *arena = arena_create(128 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *yaml_spec = 
+      "version: 2.0.0\n"
+      "name: test_signature_wf\n"
+      "on: { manual: {} }\n"
+      "jobs:\n"
+      "  job1:\n"
+      "    type: task\n"
+      "    steps: []\n";
+
+  WorkflowAST ast;
+  int32_t parse_res = parser_parse_buffer(arena, yaml_spec, strlen(yaml_spec), &ast);
+  cr_assert_eq(parse_res, ERR_SUCCESS);
+
+  int32_t dag_res = compile_workflow(arena, &ast);
+  cr_assert_eq(dag_res, ERR_SUCCESS);
+
+  const char *tmp_nbc = "/tmp/test_signature_output.nbc";
+  int32_t compile_res = bytecode_compile_workflow(arena, &ast, tmp_nbc);
+  cr_assert_eq(compile_res, ERR_SUCCESS);
+
+  Jsonv_Arena *jarena = jsonv_ctx_arena(ast.jsonv_ctx);
+  NVMContext nvm_ctx;
+  int32_t nvm_init_res = nvm_init_from_file(&nvm_ctx, arena, jarena, tmp_nbc);
+  cr_assert_eq(nvm_init_res, ERR_SUCCESS);
+  nvm_close(&nvm_ctx);
+
+  // Corrupt a byte in the Constant Pool/Code area to trigger signature validation failure
+  FILE *f = fopen(tmp_nbc, "r+b");
+  cr_assert_not_null(f);
+  fseek(f, sizeof(NVMHeader) + 5, SEEK_SET);
+  uint8_t corrupted_byte = 0xFF;
+  fwrite(&corrupted_byte, 1, 1, f);
+  fclose(f);
+
+  nvm_init_res = nvm_init_from_file(&nvm_ctx, arena, jarena, tmp_nbc);
+  cr_assert_eq(nvm_init_res, ERR_VM_ILLEGAL_INSTRUCTION, "Corrupted binary signature check must fail");
+  
+  unlink(tmp_nbc);
+  arena_destroy(arena);
+  /*#endregion*/
+}
+
+Test(ir_stage22, plugin_unified_hot_swappability) {
+  /*#region*/
+  NestorPluginAPI api;
+  memset(&api, 0, sizeof(api));
+
+  // 1. Attempt to load the test plugin dynamically
+  int32_t rc = plugin_load_dynamic("test_dynamic_plugin", &api);
+  cr_assert_eq(rc, 0, "Should load dynamic plugin test_dynamic_plugin successfully");
+  cr_assert_not_null(api.execute, "Plugin execute callback must not be null");
+
+  // 2. Load a non-existent plugin and verify it fails gracefully
+  NestorPluginAPI dummy_api;
+  int32_t fail_rc = plugin_load_dynamic("non_existent_plugin_9999", &dummy_api);
+  cr_assert_neq(fail_rc, 0, "Loading non-existent plugin should fail");
+
+  if (api.shutdown) {
+    api.shutdown();
+  }
+  /*#endregion*/
+}
+
+
+
 Test(ir_stage14, variables_validation_and_cycles) {
   Arena *arena = arena_create(128 * 1024);
   cr_assert_not_null(arena);

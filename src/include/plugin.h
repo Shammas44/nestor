@@ -22,8 +22,11 @@ struct PluginExecutor {
   long in_process_exit_code;
 };
 
+#include "nestor_plugin.h"
+
 int32_t plugin_start(PluginExecutor *pe, Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *ast, Jsonv_Value context_val, StepNode *step);
 int32_t plugin_poll(PluginExecutor *pe, Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value *context_val, StepNode *step, bool *finished, long *exit_code);
 void plugin_cleanup(PluginExecutor *pe);
+int32_t plugin_load_dynamic(const char *name, NestorPluginAPI *out_api);
 
 #endif

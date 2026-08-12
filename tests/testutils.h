@@ -31,7 +31,7 @@ void test_fini(void);
 #define SET_TEST_NAME(suite, test) current_test_name = STR(suite) ":" STR(test)
 
 #define TIMED_TEST(suite, name, f_init, f_fini)                                \
-  Test(suite, name, .init = f_init, .fini = f_fini) {                          \
+  Test(suite, name, .init = f_init, .fini = f_fini, .timeout = 10) {            \
     SET_TEST_NAME(suite, name);
 
 #define END_TIMED_TEST }

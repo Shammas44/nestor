@@ -6,6 +6,9 @@
 #include "aho_corasick.h"
 #include "transport.h"
 #include "ast.h"
+#include "crypto.h"
+#include "parser.h"
+#include "compiler.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,6 +100,22 @@ static Jsonv_Value get_constant(NVMContext *ctx, uint32_t idx) {
   /*#endregion*/
 }
 
+static void get_active_public_key(uint8_t *pub_key) {
+  /*#region*/
+  const char *env_pub = getenv("NESTOR_PUBLIC_KEY");
+  if (env_pub && strlen(env_pub) == 64) {
+    // Parsing Hexadecimal representation of public key from environment
+    for (int i = 0; i < 32; i++) {
+      unsigned int byte_val;
+      sscanf(env_pub + i * 2, "%02x", &byte_val);
+      pub_key[i] = (uint8_t)byte_val;
+    }
+  } else {
+    memcpy(pub_key, DEFAULT_PUB_KEY, 32);
+  }
+  /*#endregion*/
+}
+
 int32_t nvm_init_from_file(NVMContext *ctx, Arena *arena, Jsonv_Arena *jsonv_arena, const char *nbc_file_path) {
   /*#region*/
   if (!ctx || !arena || !nbc_file_path) return ERR_INVALID_BOUNDARY;
@@ -130,12 +149,60 @@ int32_t nvm_init_from_file(NVMContext *ctx, Arena *arena, Jsonv_Arena *jsonv_are
     return ERR_INVALID_BOUNDARY;
   }
 
+  // Cryptographic Signature Validation
+  if (ctx->header->flags & 1) {
+    // Copy the mapped memory to a temp buffer so we can verify the signature with the signature block cleared.
+    uint8_t *verify_buf = na_alloc(arena, ctx->mapped_size);
+    if (!verify_buf) {
+      munmap((void *)ctx->mapped_file, ctx->mapped_size);
+      ctx->mapped_file = NULL;
+      return ERR_OOM;
+    }
+    memcpy(verify_buf, ctx->mapped_file, ctx->mapped_size);
+    
+    // Clear the signature block in the temporary verification buffer.
+    memset(((NVMHeader *)verify_buf)->signature, 0, 64);
+    
+    uint8_t active_pub_key[32];
+    get_active_public_key(active_pub_key);
+    
+    int32_t verify_res = crypto_verify_binary(active_pub_key, verify_buf, ctx->mapped_size, ctx->header->signature);
+    if (verify_res != 0) {
+      fprintf(stderr, "DEBUG: verify failed with %d, mapped_size=%zu\n", verify_res, ctx->mapped_size);
+      munmap((void *)ctx->mapped_file, ctx->mapped_size);
+      ctx->mapped_file = NULL;
+      return ERR_VM_ILLEGAL_INSTRUCTION;
+    }
+  }
+
   ctx->const_pool = ctx->mapped_file + ctx->header->const_pool_offset;
   ctx->code_segment = ctx->mapped_file + ctx->header->code_offset;
   ctx->pc = 0;
   ctx->sp = 0;
   ctx->call_stack_top = NULL;
   ctx->call_stack_depth = 0;
+
+  // Reconstruct WorkflowAST dynamically from embedded metadata in wf_table if present
+  if (ctx->header->wf_table_count > 0 && ctx->header->wf_table_offset + sizeof(NVMWorkflowEntry) <= ctx->mapped_size) {
+    const NVMWorkflowEntry *entry = (const NVMWorkflowEntry *)(ctx->mapped_file + ctx->header->wf_table_offset);
+    if (entry->metadata_offset + entry->metadata_size <= ctx->mapped_size && entry->metadata_size > 0) {
+      const char *metadata_str = (const char *)(ctx->mapped_file + entry->metadata_offset);
+      WorkflowAST *ast = na_alloc(arena, sizeof(WorkflowAST));
+      if (!ast) {
+        munmap((void *)ctx->mapped_file, ctx->mapped_size);
+        ctx->mapped_file = NULL;
+        return ERR_OOM;
+      }
+      memset(ast, 0, sizeof(WorkflowAST));
+      int32_t parse_res = parser_parse_buffer(arena, metadata_str, entry->metadata_size, ast);
+      if (parse_res == ERR_SUCCESS) {
+        int32_t comp_res = compile_workflow(arena, ast);
+        if (comp_res == ERR_SUCCESS) {
+          ctx->ast = ast;
+        }
+      }
+    }
+  }
 
   return ERR_SUCCESS;
   /*#endregion*/
@@ -383,193 +450,9 @@ int32_t nvm_execute_loop(NVMContext *ctx) {
                   push_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
                   evaluate_job_variables(ctx->arena, ctx->jsonv_arena, ctx->context_val, job, local_vars);
 
-                  if (job->type == NODE_IF) {
-                    job->execution_state = STATE_RUNNING;
-                    Jsonv_Value eval_res = jsonv_val_undefined();
-                    int32_t status = evaluate_expression(ctx->arena, job->spec.binary_if.condition, ctx->jsonv_arena, *(ctx->context_val), &eval_res);
-                    if (status != ERR_SUCCESS) {
-                      pop_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
-                      job->execution_state = STATE_FAILED;
-                      return status;
-                    }
-
-                    if (is_truthy(eval_res)) {
-                      job->execution_state = STATE_SUCCEEDED;
-                      for (size_t c = 0; c < job->spec.binary_if.else_count; c++) {
-                        mark_job_skipped(ctx->ast, job->spec.binary_if.else_branch[c]);
-                      }
-                    } else {
-                      job->execution_state = STATE_SUCCEEDED;
-                      for (size_t c = 0; c < job->spec.binary_if.then_count; c++) {
-                        mark_job_skipped(ctx->ast, job->spec.binary_if.then_branch[c]);
-                      }
-                    }
-
-                    // Evaluate job variables second pass (for public outcomes)
-                    evaluate_job_variables(ctx->arena, ctx->jsonv_arena, ctx->context_val, job, local_vars);
-
+                  if (job->type == NODE_IF || job->type == NODE_SWITCH || job->type == NODE_FORK || job->type == NODE_JOIN) {
                     pop_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
-                    if (curr->sp >= VM_STACK_LIMIT) return ERR_VM_STACK_OVERFLOW;
-                    curr->stack[curr->sp++] = jsonv_val_bool(true);
-                  } else if (job->type == NODE_SWITCH) {
-                    job->execution_state = STATE_RUNNING;
-                    SwitchCase *sc = job->spec.multi_switch.cases;
-                    bool matched = false;
-                    while (sc) {
-                      if (!matched) {
-                        Jsonv_Value eval_res = jsonv_val_undefined();
-                        int32_t status = evaluate_expression(ctx->arena, sc->condition, ctx->jsonv_arena, *(ctx->context_val), &eval_res);
-                        if (status == ERR_SUCCESS && is_truthy(eval_res)) {
-                          matched = true;
-                        } else {
-                          for (size_t t = 0; t < sc->then_count; t++) {
-                            mark_job_skipped(ctx->ast, sc->then_branch[t]);
-                          }
-                        }
-                      } else {
-                        for (size_t t = 0; t < sc->then_count; t++) {
-                          mark_job_skipped(ctx->ast, sc->then_branch[t]);
-                        }
-                      }
-                      sc = sc->next;
-                    }
-                    if (matched) {
-                      for (size_t d = 0; d < job->spec.multi_switch.default_count; d++) {
-                        mark_job_skipped(ctx->ast, job->spec.multi_switch.default_branch[d]);
-                      }
-                    }
-                    job->execution_state = STATE_SUCCEEDED;
-
-                    // Evaluate job variables second pass (for public outcomes)
-                    evaluate_job_variables(ctx->arena, ctx->jsonv_arena, ctx->context_val, job, local_vars);
-
-                    pop_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
-                    if (curr->sp >= VM_STACK_LIMIT) return ERR_VM_STACK_OVERFLOW;
-                    curr->stack[curr->sp++] = jsonv_val_bool(true);
-                  } else if (job->type == NODE_FORK) {
-                    job->execution_state = STATE_SUCCEEDED;
-                    // Spawn a thread for each branch!
-                    for (size_t b = 0; b < job->spec.fork_node.branch_count; b++) {
-                      StringView branch_id = job->spec.fork_node.branches[b];
-                      
-                      // Look up branch_job in sorted list
-                      JobNode *branch_job = ctx->ast->jobs_head;
-                      int branch_idx = 0;
-                      while (branch_job) {
-                        if (sv_compare(branch_job->id, branch_id) == 0) break;
-                        branch_job = branch_job->next_sorted;
-                        branch_idx++;
-                      }
-                      
-                      if (branch_job) {
-                        VMThread *new_thread = na_alloc(ctx->arena, sizeof(VMThread));
-                        if (!new_thread) {
-                          pop_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
-                          return ERR_OOM;
-                        }
-                        memset(new_thread, 0, sizeof(VMThread));
-                        new_thread->pc = branch_idx * 5;
-                        new_thread->sp = curr->sp;
-                        memcpy(new_thread->stack, curr->stack, sizeof(curr->stack));
-                        new_thread->call_stack_top = curr->call_stack_top;
-                        new_thread->call_stack_depth = curr->call_stack_depth;
-                        new_thread->is_active = true;
-                        new_thread->target_job = branch_job;
-                        
-                        new_thread->next = threads_head;
-                        threads_head = new_thread;
-                      }
-                    }
-                    
-                    // The main thread jumps past the fork branches to the next independent job
-                    JobNode *next_job = job->next_sorted;
-                    int next_idx = 0;
-                    JobNode *temp = ctx->ast->jobs_head;
-                    while (temp && temp != next_job) {
-                      temp = temp->next_sorted;
-                      next_idx++;
-                    }
-                    
-                    while (next_job) {
-                      bool is_branch = false;
-                      for (size_t b = 0; b < job->spec.fork_node.branch_count; b++) {
-                        if (sv_compare(next_job->id, job->spec.fork_node.branches[b]) == 0) {
-                          is_branch = true;
-                          break;
-                        }
-                      }
-                      if (!is_branch) break;
-                      next_job = next_job->next_sorted;
-                      next_idx++;
-                    }
-                    curr->pc = next_idx * 5;
-
-                    // Evaluate job variables second pass (for public outcomes)
-                    evaluate_job_variables(ctx->arena, ctx->jsonv_arena, ctx->context_val, job, local_vars);
-                    pop_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
-                    if (curr->sp >= VM_STACK_LIMIT) return ERR_VM_STACK_OVERFLOW;
-                    curr->stack[curr->sp++] = jsonv_val_bool(true);
-                  } else if (job->type == NODE_JOIN) {
-                    job->execution_state = STATE_RUNNING;
-                    size_t num_succeeded = 0;
-                    size_t num_failed = 0;
-                    size_t num_skipped = 0;
-                    for (size_t d = 0; d < job->dependency_count; d++) {
-                      JobNode *dep = job->depends_on_nodes[d];
-                      if (dep) {
-                        if (dep->execution_state == STATE_SUCCEEDED) num_succeeded++;
-                        else if (dep->execution_state == STATE_FAILED) num_failed++;
-                        else if (dep->execution_state == STATE_SKIPPED) num_skipped++;
-                      }
-                    }
-
-                    size_t num_completed = num_succeeded + num_failed + num_skipped;
-                    bool join_ok = false;
-                    bool join_evaluated = false;
-                    StringView strat = job->spec.join_node.strategy;
-
-                    if (sv_equals_cstr(strat, "all")) {
-                      if (num_completed == job->dependency_count) {
-                        join_ok = (num_succeeded + num_skipped == job->dependency_count);
-                        join_evaluated = true;
-                      }
-                    } else if (sv_equals_cstr(strat, "any")) {
-                      if (num_succeeded > 0) {
-                        join_ok = true;
-                        join_evaluated = true;
-                      } else if (num_completed == job->dependency_count) {
-                        join_ok = false;
-                        join_evaluated = true;
-                      }
-                    } else if (sv_equals_cstr(strat, "n_required")) {
-                      size_t n_req = job->spec.join_node.n_required;
-                      if (num_succeeded >= n_req) {
-                        join_ok = true;
-                        join_evaluated = true;
-                      } else if (num_completed == job->dependency_count) {
-                        join_ok = false;
-                        join_evaluated = true;
-                      }
-                    }
-
-                    if (join_evaluated) {
-                      job->execution_state = join_ok ? STATE_SUCCEEDED : STATE_FAILED;
-                      evaluate_job_variables(ctx->arena, ctx->jsonv_arena, ctx->context_val, job, local_vars);
-                      pop_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
-                      if (curr->sp >= VM_STACK_LIMIT) return ERR_VM_STACK_OVERFLOW;
-                      curr->stack[curr->sp++] = jsonv_val_bool(join_ok);
-                    } else {
-                      // Suspend thread waiting for join strategy to satisfy
-                      curr->is_suspended = true;
-                      curr->is_waiting_join = true;
-                      if (sv_equals_cstr(strat, "all")) curr->join_strategy = 1;
-                      else if (sv_equals_cstr(strat, "any")) curr->join_strategy = 2;
-                      else if (sv_equals_cstr(strat, "n_required")) curr->join_strategy = 3;
-
-                      pop_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
-                      curr->pc -= 5; // Back off to retry OP_CALL_PROVIDER next tick
-                      break;
-                    }
+                    return ERR_VM_ILLEGAL_INSTRUCTION;
                   } else if (job->type == NODE_TRANSFORM) {
                     job->execution_state = STATE_RUNNING;
                     Jsonv_Value transform_res = jsonv_val_undefined();
@@ -772,18 +655,132 @@ int32_t nvm_execute_loop(NVMContext *ctx) {
                 new_thread->next = threads_head;
                 threads_head = new_thread;
               }
-
-              curr->is_active = false;
               break;
             }
 
             case OP_JOIN: {
-              if (curr->pc >= ctx->header->code_size) return ERR_VM_OUT_OF_BOUNDS;
+              if (curr->pc + 5 > ctx->header->code_size) return ERR_VM_OUT_OF_BOUNDS;
               uint8_t strategy = ctx->code_segment[curr->pc++];
+              uint32_t join_job_idx = (ctx->code_segment[curr->pc] << 24) |
+                                      (ctx->code_segment[curr->pc + 1] << 16) |
+                                      (ctx->code_segment[curr->pc + 2] << 8) |
+                                      (ctx->code_segment[curr->pc + 3]);
+              curr->pc += 4;
+
+              if (ctx->ast && ctx->context_val) {
+                Jsonv_Value job_id_val = get_constant(ctx, join_job_idx);
+                StringView job_id_sv = { (const char *)job_id_val.as.p, jsonv_val_str_len(job_id_val) };
+
+                JobNode *job = ctx->ast->jobs_head;
+                while (job) {
+                  if (sv_compare(job->id, job_id_sv) == 0) break;
+                  job = job->next_sorted;
+                }
+
+                if (job) {
+                  curr->target_job = job;
+                  if (job->execution_state == STATE_PENDING) {
+                    job->execution_state = STATE_RUNNING;
+                  }
+                  
+                  char *job_id_cstr = allocate_jsonv_string(ctx->arena, job->id.data, job->id.length);
+                  Jsonv_Obj *job_outcome_obj = jsonv_obj_new(ctx->jsonv_arena, NULL);
+                  Jsonv_Value jobs_val_obj;
+                  if (jsonv_obj_get(ctx->context_val->as.p, "jobs", &jobs_val_obj) && jobs_val_obj.tag == JSONV_VAL_OBJ) {
+                    jsonv_obj_set(ctx->jsonv_arena, jobs_val_obj.as.p, job_id_cstr, jsonv_val_obj(job_outcome_obj));
+                  }
+                  
+                  Jsonv_Value local_vars;
+                  local_vars.tag = JSONV_VAL_OBJ;
+                  local_vars.as.p = jsonv_obj_new(ctx->jsonv_arena, NULL);
+                  push_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
+                  evaluate_job_variables(ctx->arena, ctx->jsonv_arena, ctx->context_val, job, local_vars);
+                  pop_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
+                }
+              }
 
               curr->is_suspended = true;
               curr->is_waiting_join = true;
               curr->join_strategy = strategy;
+              break;
+            }
+
+            case OP_LOAD_ENV: {
+              uint32_t key_idx = read_uint32_be_thread(ctx, curr);
+              if (key_idx >= ctx->header->const_pool_count) return ERR_VM_OUT_OF_BOUNDS;
+              Jsonv_Value key_val = get_constant(ctx, key_idx);
+              if (key_val.tag != JSONV_VAL_STRING) return ERR_VM_ILLEGAL_INSTRUCTION;
+              
+              const char *key_str = key_val.as.p;
+              Jsonv_Value val = jsonv_val_null();
+              
+              bool found = false;
+              if (ctx->context_val && ctx->context_val->tag == JSONV_VAL_OBJ) {
+                Jsonv_Value env_obj;
+                if (jsonv_obj_get(ctx->context_val->as.p, "env", &env_obj) && env_obj.tag == JSONV_VAL_OBJ) {
+                  if (jsonv_obj_get(env_obj.as.p, key_str, &val)) {
+                    found = true;
+                  }
+                }
+              }
+              
+              if (!found) {
+                const char *env_val = getenv(key_str);
+                if (env_val) {
+                  char *env_val_cstr = allocate_jsonv_string(ctx->arena, env_val, strlen(env_val));
+                  val = jsonv_val_str(env_val_cstr);
+                }
+              }
+              
+              if (curr->sp >= VM_STACK_LIMIT) return ERR_VM_STACK_OVERFLOW;
+              curr->stack[curr->sp++] = val;
+              break;
+            }
+
+            case OP_STORE_VAR: {
+              if (curr->sp == 0) return ERR_VM_STACK_UNDERFLOW;
+              uint32_t key_idx = read_uint32_be_thread(ctx, curr);
+              if (key_idx >= ctx->header->const_pool_count) return ERR_VM_OUT_OF_BOUNDS;
+              Jsonv_Value key_val = get_constant(ctx, key_idx);
+              if (key_val.tag != JSONV_VAL_STRING) return ERR_VM_ILLEGAL_INSTRUCTION;
+              
+              const char *key_str = key_val.as.p;
+              Jsonv_Value val = curr->stack[--curr->sp];
+              
+              if (ctx->context_val && ctx->context_val->tag == JSONV_VAL_OBJ) {
+                jsonv_obj_set(ctx->jsonv_arena, ctx->context_val->as.p, key_str, val);
+              }
+              break;
+            }
+
+            case OP_COMPLETE_JOB: {
+              uint32_t job_idx = read_uint32_be_thread(ctx, curr);
+              if (job_idx >= ctx->header->const_pool_count) return ERR_VM_OUT_OF_BOUNDS;
+              if (ctx->ast) {
+                Jsonv_Value job_id_val = get_constant(ctx, job_idx);
+                StringView job_id_sv = { (const char *)job_id_val.as.p, jsonv_val_str_len(job_id_val) };
+                JobNode *job = ctx->ast->jobs_head;
+                while (job) {
+                  if (sv_compare(job->id, job_id_sv) == 0) {
+                    if (job->execution_state == STATE_PENDING || job->execution_state == STATE_RUNNING) {
+                      job->execution_state = STATE_SUCCEEDED;
+                    }
+                    break;
+                  }
+                  job = job->next_sorted;
+                }
+              }
+              break;
+            }
+
+            case OP_SKIP_JOB: {
+              uint32_t job_idx = read_uint32_be_thread(ctx, curr);
+              if (job_idx >= ctx->header->const_pool_count) return ERR_VM_OUT_OF_BOUNDS;
+              if (ctx->ast) {
+                Jsonv_Value job_id_val = get_constant(ctx, job_idx);
+                StringView job_id_sv = { (const char *)job_id_val.as.p, jsonv_val_str_len(job_id_val) };
+                mark_job_skipped(ctx->ast, job_id_sv);
+              }
               break;
             }
 
@@ -1009,18 +1006,8 @@ int32_t nvm_execute_loop(NVMContext *ctx) {
 
     VMThread *t_join = threads_head;
     while (t_join) {
-      if (t_join->is_active && t_join->is_suspended && t_join->is_waiting_join) {
-        JobNode *join_job = NULL;
-        if (ctx->ast) {
-          JobNode *j = ctx->ast->jobs_head;
-          while (j) {
-            if (j->type == NODE_JOIN && (j->execution_state == STATE_PENDING || j->execution_state == STATE_RUNNING)) {
-              join_job = j;
-              break;
-            }
-            j = j->next_sorted;
-          }
-        }
+      if (t_join->is_active && t_join->is_suspended && t_join->is_waiting_join && t_join->target_job) {
+        JobNode *join_job = t_join->target_job;
 
         if (join_job) {
           size_t num_succeeded = 0;
@@ -1105,8 +1092,26 @@ int32_t nvm_execute_loop(NVMContext *ctx) {
 
           if (join_evaluated) {
             join_job->execution_state = join_ok ? STATE_SUCCEEDED : STATE_FAILED;
-            t_join->is_suspended = false;
-            t_join->is_waiting_join = false;
+            
+            // We need to evaluate the variables again for public outcomes
+            Jsonv_Value local_vars;
+            local_vars.tag = JSONV_VAL_OBJ;
+            local_vars.as.p = jsonv_obj_new(ctx->jsonv_arena, NULL);
+            push_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
+            evaluate_job_variables(ctx->arena, ctx->jsonv_arena, ctx->context_val, join_job, local_vars);
+            pop_local_vars(ctx->jsonv_arena, *(ctx->context_val), local_vars);
+
+            if (join_ok) {
+              t_join->is_suspended = false;
+              t_join->is_waiting_join = false;
+              t_join->target_job = NULL;
+              if (t_join->sp >= VM_STACK_LIMIT) return ERR_VM_STACK_OVERFLOW;
+              t_join->stack[t_join->sp++] = jsonv_val_bool(true);
+            } else {
+              t_join->is_active = false;
+              t_join->is_suspended = false;
+              t_join->target_job = NULL;
+            }
           }
         }
       }
