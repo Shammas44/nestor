@@ -8,7 +8,7 @@ Workflows in Nestor are specified as scenarios in either **JSON** or **YAML** fo
 
 ## CLI Usage & Subcommands
 
-Nestor compiles into a single binary (`bin/main`). By default, it operates on compiled bytecode executed through the Nestor Virtual Machine (NVM). The legacy AST-based runner is preserved for regression testing but is bypassed for normal runs.
+Nestor compiles into a single binary (`bin/main`). Workflows are compiled to bytecode and executed on the Nestor Virtual Machine (NVM) runtime.
 
 ### 1. Direct Workflow Execution (Default: NVM Mode)
 To run a single workflow scenario, pipe the YAML or JSON contents to the binary. Under the hood, Nestor compiles the input configuration to bytecode in-memory and executes it using the NVM:

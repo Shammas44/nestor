@@ -66,7 +66,7 @@ This phase introduces stateful capabilities and advanced scoping rules to optimi
 
 ## Phase 2: Full Nestor VM (NVM) Implementation
 
-This phase completed the stack-based VM runtime execution, enabling NVM to fully replace the legacy AST interpreter runner.
+This phase completed the stack-based VM runtime execution, enabling NVM as the sole, native execution engine.
 
 *   **Stage 17: VM Opcode Completeness**: Support for control flow routing, binary conditions, switch cases, loops, fork/join barriers, and error fallback handlers directly inside the NVM interpreter tick loop.
 *   **Stage 17.5: Direct VM I/O & Plugin Bridges**: Integration of the non-blocking `curl_multi` transport and subprocess plugin runners into NVM opcodes.

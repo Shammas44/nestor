@@ -1,4 +1,4 @@
-Nestor is structured as a modular, stateless workflow pipeline engine in C. By default, it compiles declarative workflow configurations into binary bytecode and executes them on the custom stack-based Nestor Virtual Machine (NVM). The legacy AST interpretation engine (`runner.c`) is kept for backwards-compatibility but is no longer used for default execution paths.
+Nestor is structured as a modular, stateless workflow pipeline engine in C. It compiles declarative workflow configurations into binary bytecode and executes them on the custom stack-based Nestor Virtual Machine (NVM).
 
 ---
 
@@ -12,18 +12,13 @@ graph TB
         Parser[parser.c] -->|Validate Schema| Jsonv[json-validation-jsonv]
     end
 
-    subgraph Default Bytecode Execution (VM Mode)
+    subgraph Bytecode Execution (VM Mode)
         Compiler -->|Bytecode Compiler| BytecodeComp[bytecode_compiler.c]
         BytecodeComp -->|NBC Bytecode| NVM[nvm.c VM Interpreter]
         NVM -->|Variables / JSONata| Evaluator[evaluator.c]
         NVM -->|HTTP Transport| Transport[transport.c]
         NVM -->|Caching Engine| Cache[cache.c]
         NVM -->|Log Stream| Redactor[redactor.c]
-    end
-
-    subgraph Legacy Runtime Execution (AST Mode - Deprecated)
-        Compiler -->|Execution AST| Runner[runner.c]
-        Runner -.->|Fallback Execution Path| Evaluator
     end
 ```
 
@@ -36,11 +31,9 @@ Integrates the `jsonv` validation parser to enforce structural constraints on in
 ### 1.3 DAG Compiler (`compiler.c`)
 Compiles the parsed workflow tree into an executable Directed Acyclic Graph. It checks that variable references contain no loops, verifies start and end boundaries, topologically sorts jobs using Kahn's algorithm, and validates join dominance to ensure parallel forks converge correctly before workflow exits.
 
-### 1.4 Nestor Virtual Machine (NVM / `nvm.c` / `bytecode_compiler.c`) - Default
-The default execution engine. The compiler maps the topological execution sequence to standard VM opcodes (`OP_PUSH_CONST`, `OP_CALL_PROVIDER`, `OP_JUMP`, etc.) and serializes it to a single bytecode binary (`.nbc`). The VM interpreter maps the `.nbc` directly via `mmap` and runs instructions inside a secure, bound-checked evaluation stack. It handles environment, job, and step scopes, non-blocking HTTP multi-pooling, inline SQLite caching, and secret redaction.
+### 1.4 Nestor Virtual Machine & Execution Runner (NVM / `nvm.c` / `bytecode_compiler.c` / `runner.c`)
+The sole execution engine. The compiler maps the topological execution sequence to standard VM opcodes (`OP_PUSH_CONST`, `OP_CALL_PROVIDER`, `OP_JUMP`, etc.) and serializes it to a single bytecode binary (`.nbc`). The VM interpreter maps the `.nbc` directly via `mmap` and runs instructions inside a secure, bound-checked evaluation stack. It handles environment, job, and step scopes, non-blocking HTTP multi-pooling, inline SQLite caching, and secret redaction.
 
-### 1.5 Legacy DAG Execution Engine (`runner.c` - Fallback)
-A legacy AST-based interpreter that schedules and advances jobs directly from the compiled tree. It is retained solely for testing verification and legacy scenario runs.
 
 
 ---
