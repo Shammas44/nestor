@@ -42,10 +42,12 @@ bin/main apply output.nbc
 ```
 *   **Decoupled & Hermetic**: The VM extracts the workflow schema configuration directly from the `.nbc` file at startup to reconstruct the execution graph. No YAML or JSON source files are required at runtime.
 
-### 5. Bytecode Disassembly (`nestor-dis`)
+### 5. Bytecode Disassembly (`disassemble` / `dis`)
 Inspects compiled binary files to display metadata, constants, and decoded instructions:
 ```bash
-bin/nestor-dis output.nbc
+bin/main disassemble output.nbc
+# or
+bin/main dis output.nbc
 ```
 This utility validates the binary's cryptographic signature, dumps the Constant Pool, and prints code segments in a clean, offset-indexed assembly representation showing opcodes and operands (e.g. `OP_CALL_PROVIDER`, `OP_JUMP`, `OP_RETURN`).
 

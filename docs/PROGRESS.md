@@ -85,7 +85,7 @@ This document tracks the current completion status of stages outlined in the [RO
     *   [x] Implement Ed25519 signature creation in the compiler and verification checking at NVM header loading.
 *   [x] **Stage 22: Unified Plugin Architecture**
     *   [x] Modularize caching, state persistence, redaction, and transport layers as hot-swappable VM plugins.
-*   [x] **Stage 23: Disassembly Tooling (`nestor-dis`)**
+*   [x] **Stage 23: Disassembly Tooling (`disassemble` subcommand)**
     *   [x] Develop the assembly representation tool to print compiled instruction listings.
 
 ---

@@ -23,7 +23,7 @@
       "The VM is fully decoupled from AST node definitions at runtime.",
       "Compiled NBC binaries contain Ed25519 signatures validated by the host public key.",
       "Subworkflows and providers are compiled into a single hermetic NBC file.",
-      "The disassembler bin/nestor-dis displays accurate assembly outputs of the compiled workflow.",
+      "The disassembler subcommand in bin/main displays accurate assembly outputs of the compiled workflow.",
       "All unit and E2E integration tests pass successfully."
     ],
     "do_not_modify": [
@@ -40,7 +40,7 @@
       "Completed Stage 20: Low-Level Bytecode Transition, decoupling the VM execution loop from the AST structure by embedding AST JSON metadata inside the compiled .nbc binary.",
       "Completed Stage 21: Cryptographic Binary Signing, implementing Ed25519 signature generation in the compiler and validation gates in the NVM loader, fully validated with unit tests.",
       "Completed Stage 22: Unified Plugin Architecture, implementing a unified, hot-swappable dynamic plugin loading interface for extending caching, state, and transport layers, fully validated with unit tests.",
-      "Completed Stage 23: Disassembly Tooling, implementing the nestor-dis utility to print bytecode instructions, constants pool, and signature validation status from compiled .nbc files."
+      "Completed Stage 23: Disassembly Tooling, implementing the disassemble/dis subcommand to print bytecode instructions, constants pool, and signature validation status from compiled .nbc files."
     ],
     "in_progress": [],
     "remaining": [],

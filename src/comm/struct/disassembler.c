@@ -58,32 +58,21 @@ static const char *get_constant_str(const uint8_t *const_pool, uint32_t const_po
   /*#endregion*/
 }
 
-int main(int argc, char **argv) {
+int32_t disassemble_nbc_file(Arena *arena, const char *nbc_file_path) {
   /*#region*/
-  if (argc < 2) {
-    fprintf(stderr, "Usage: %s <nbc_file>\n", argv[0]);
-    return 1;
-  }
+  if (!arena || !nbc_file_path) return ERR_INVALID_BOUNDARY;
 
-  Arena *arena = arena_create(1024 * 1024);
-  if (!arena) {
-    fprintf(stderr, "Fatal: failed to create allocator arena\n");
-    return 1;
-  }
-
-  int fd = open(argv[1], O_RDONLY);
+  int fd = open(nbc_file_path, O_RDONLY);
   if (fd < 0) {
-    fprintf(stderr, "Error: could not open file '%s'\n", argv[1]);
-    arena_destroy(arena);
-    return 1;
+    fprintf(stderr, "Error: could not open file '%s'\n", nbc_file_path);
+    return ERR_HTTP_TRANSPORT;
   }
 
   struct stat st;
   if (fstat(fd, &st) < 0 || st.st_size < (off_t)sizeof(NVMHeader)) {
     fprintf(stderr, "Error: invalid file size\n");
     close(fd);
-    arena_destroy(arena);
-    return 1;
+    return ERR_INVALID_BOUNDARY;
   }
 
   size_t mapped_size = (size_t)st.st_size;
@@ -92,16 +81,14 @@ int main(int argc, char **argv) {
 
   if (mapped_file == MAP_FAILED) {
     fprintf(stderr, "Error: failed to map file\n");
-    arena_destroy(arena);
-    return 1;
+    return ERR_HTTP_TRANSPORT;
   }
 
   const NVMHeader *header = (const NVMHeader *)mapped_file;
   if (memcmp(header->magic, "NEST", 4) != 0) {
     fprintf(stderr, "Error: invalid NEST magic header\n");
     munmap((void *)mapped_file, mapped_size);
-    arena_destroy(arena);
-    return 1;
+    return ERR_INVALID_BOUNDARY;
   }
 
   const char *sig_status = "Unsigned";
@@ -110,8 +97,7 @@ int main(int argc, char **argv) {
     if (!verify_buf) {
       fprintf(stderr, "Error: memory allocation failure during verification\n");
       munmap((void *)mapped_file, mapped_size);
-      arena_destroy(arena);
-      return 1;
+      return ERR_OOM;
     }
     memcpy(verify_buf, mapped_file, mapped_size);
     memset(((NVMHeader *)verify_buf)->signature, 0, 64);
@@ -161,6 +147,7 @@ int main(int argc, char **argv) {
   while (pc < code_size) {
     uint8_t op = code_segment[pc];
     printf("  0x%04X: ", pc);
+
     switch (op) {
       case OP_NOP:
         printf("OP_NOP\n");
@@ -322,7 +309,6 @@ int main(int argc, char **argv) {
   }
 
   munmap((void *)mapped_file, mapped_size);
-  arena_destroy(arena);
-  return 0;
+  return ERR_SUCCESS;
   /*#endregion*/
 }

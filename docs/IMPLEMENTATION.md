@@ -118,9 +118,13 @@ NVM executes compiled bytecode sequences sequentially or concurrently using a st
 
 ---
 
-## 5. Tooling: Disassembler (`nestor-dis`)
+## 5. Tooling: Disassembler (`disassemble` subcommand)
 
-To maintain code visibility, Nestor provides `bin/nestor-dis` to disassemble bytecode binaries into a readable assembly-like representation:
+To maintain code visibility, Nestor exposes a built-in `disassemble` (or `dis`) subcommand in the main binary to disassemble bytecode binaries into a readable assembly-like representation:
+
+```bash
+bin/main disassemble output.nbc
+```
 
 ```assembly
 ; Source: workflow.yaml

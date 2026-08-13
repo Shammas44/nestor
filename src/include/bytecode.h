@@ -54,5 +54,6 @@ typedef struct {
 
 int32_t bytecode_compile_workspace(Arena *arena, WorkspaceMap *map, const char *output_nbc_path);
 int32_t bytecode_compile_workflow(Arena *arena, WorkflowAST *ast, const char *output_nbc_path);
+int32_t disassemble_nbc_file(Arena *arena, const char *nbc_file_path);
 
 #endif // _NESTOR_BYTECODE_H

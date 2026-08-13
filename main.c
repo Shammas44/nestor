@@ -309,6 +309,15 @@ int main(int argc, char **argv) {
         arena_destroy(arena);
         return 0;
       }
+    } else if (strcmp(argv[1], "disassemble") == 0 || strcmp(argv[1], "dis") == 0) {
+      if (argc < 3) {
+        fprintf(stderr, "Usage: %s disassemble <nbc_file>\n", argv[0]);
+        arena_destroy(arena);
+        return 1;
+      }
+      int32_t dis_res = disassemble_nbc_file(arena, argv[2]);
+      arena_destroy(arena);
+      return dis_res == ERR_SUCCESS ? 0 : 1;
     }
   }
 
