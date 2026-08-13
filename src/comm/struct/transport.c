@@ -18,6 +18,8 @@ typedef struct {
   char expires[128];
   char etag[128];
   char last_modified[128];
+  Arena *arena;
+  ResponseHeaderNode *headers_head;
 } CurlRequestState;
 
 static size_t my_header_callback(char *buffer, size_t size, size_t nitems, void *userdata) {
@@ -51,6 +53,18 @@ static size_t my_header_callback(char *buffer, size_t size, size_t nitems, void 
       strncpy(state->etag, value, sizeof(state->etag) - 1);
     } else if (strcasecmp(name, "Last-Modified") == 0) {
       strncpy(state->last_modified, value, sizeof(state->last_modified) - 1);
+    }
+
+    if (state->arena) {
+      ResponseHeaderNode *node = na_alloc(state->arena, sizeof(ResponseHeaderNode));
+      if (node) {
+        node->name = na_alloc(state->arena, strlen(name) + 1);
+        if (node->name) strcpy(node->name, name);
+        node->value = na_alloc(state->arena, strlen(value) + 1);
+        if (node->value) strcpy(node->value, value);
+        node->next = state->headers_head;
+        state->headers_head = node;
+      }
     }
   }
   return total;
@@ -140,6 +154,7 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
     return ERR_OOM;
   }
   memset(req_state, 0, sizeof(CurlRequestState));
+  req_state->arena = arena;
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, my_header_callback);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)req_state);
 
@@ -150,6 +165,11 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
   curl_easy_setopt(curl, CURLOPT_URL, url_cstr);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+  if (step->http.insecure) {
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+  }
 
   StringView method = step->http.method;
   if (sv_equals_cstr(method, "POST")) {
@@ -343,6 +363,7 @@ static int32_t curl_check_completed(Transport *t, Arena *arena, Jsonv_Arena *jso
         resp_buf->etag[sizeof(resp_buf->etag) - 1] = '\0';
         strncpy(resp_buf->last_modified, req_state->last_modified, sizeof(resp_buf->last_modified) - 1);
         resp_buf->last_modified[sizeof(resp_buf->last_modified) - 1] = '\0';
+        resp_buf->headers_head = req_state->headers_head;
       }
 
       if (resp_buf && resp_buf->is_stream && resp_buf->stream_fd >= 0) {
@@ -397,6 +418,13 @@ struct MockRequestState {
   long delay_ms;
 };
 
+typedef struct MockHeaderNode MockHeaderNode;
+struct MockHeaderNode {
+  char key[128];
+  char value[256];
+  MockHeaderNode *next;
+};
+
 typedef struct MockResponseEntry MockResponseEntry;
 struct MockResponseEntry {
   char url[256];
@@ -406,6 +434,7 @@ struct MockResponseEntry {
   char cache_control[256];
   char etag[128];
   char last_modified[128];
+  MockHeaderNode *headers_head;
   MockResponseEntry *next;
 };
 
@@ -413,10 +442,14 @@ static MockResponseEntry *mock_responses_head = NULL;
 static MockResponseEntry static_pool[128];
 static size_t static_pool_idx = 0;
 
+static MockHeaderNode static_header_pool[512];
+static size_t static_header_pool_idx = 0;
+
 void transport_mock_clear(void) {
   /*#region*/
   mock_responses_head = NULL;
   static_pool_idx = 0;
+  static_header_pool_idx = 0;
   /*#endregion*/
 }
 
@@ -452,6 +485,16 @@ void transport_mock_add_header(const char *url, const char *method, const char *
       } else if (strcasecmp(key, "Last-Modified") == 0) {
         strncpy(curr->last_modified, value, sizeof(curr->last_modified) - 1);
         curr->last_modified[sizeof(curr->last_modified) - 1] = '\0';
+      }
+
+      if (static_header_pool_idx < 512) {
+        MockHeaderNode *node = &static_header_pool[static_header_pool_idx++];
+        strncpy(node->key, key, sizeof(node->key) - 1);
+        node->key[sizeof(node->key) - 1] = '\0';
+        strncpy(node->value, value, sizeof(node->value) - 1);
+        node->value[sizeof(node->value) - 1] = '\0';
+        node->next = curr->headers_head;
+        curr->headers_head = node;
       }
       break;
     }
@@ -490,6 +533,20 @@ static int32_t mock_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
     resp_buf->etag[sizeof(resp_buf->etag) - 1] = '\0';
     strncpy(resp_buf->last_modified, match->last_modified, sizeof(resp_buf->last_modified) - 1);
     resp_buf->last_modified[sizeof(resp_buf->last_modified) - 1] = '\0';
+
+    MockHeaderNode *hcurr = match->headers_head;
+    while (hcurr) {
+      ResponseHeaderNode *node = na_alloc(arena, sizeof(ResponseHeaderNode));
+      if (node) {
+        node->name = na_alloc(arena, strlen(hcurr->key) + 1);
+        if (node->name) strcpy(node->name, hcurr->key);
+        node->value = na_alloc(arena, strlen(hcurr->value) + 1);
+        if (node->value) strcpy(node->value, hcurr->value);
+        node->next = resp_buf->headers_head;
+        resp_buf->headers_head = node;
+      }
+      hcurr = hcurr->next;
+    }
   } else {
     state->status_code = 404;
     state->body = "{\"error\": \"not found\"}";

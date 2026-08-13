@@ -84,6 +84,7 @@ This phase shifts the NVM execution engine to low-level assembly-like opcodes an
 *   **Stage 21: Cryptographic Binary Signing**: Implement Ed25519 asymmetric signature generation in the compiler and verification checks in the NVM loader header validation stage to prevent untrusted execution.
 *   **Stage 22: Unified Plugin Architecture**: Decouple and modularize core systems (HTTP transport, JSONata transforms, SQLite cache, Aho-Corasick redaction, and state persistence) into hot-swappable plugins conforming to the host VM integration interface.
 *   **Stage 23: Disassembly Tooling (`disassemble` subcommand)**: Build the built-in `disassemble` subcommand to print bytecode binaries in readable assembly formats, showing instruction flows, constants, and signature statuses.
+*   **Stage 23.5: HTTP SSL Bypass & Response Headers**: Add the `insecure` option to bypass SSL validation at both workflow-step and provider-config levels, and capture/expose all HTTP response headers under step outcome contexts.
 
 ---
 

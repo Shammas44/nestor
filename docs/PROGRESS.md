@@ -87,6 +87,9 @@ This document tracks the current completion status of stages outlined in the [RO
     *   [x] Modularize caching, state persistence, redaction, and transport layers as hot-swappable VM plugins.
 *   [x] **Stage 23: Disassembly Tooling (`disassemble` subcommand)**
     *   [x] Develop the assembly representation tool to print compiled instruction listings.
+*   [x] **Stage 23.5: HTTP SSL Bypass & Response Headers**
+    *   [x] Parse and support `insecure: true` flag in workflows/providers to bypass SSL checks.
+    *   [x] Collect all HTTP response headers and expose them under step outcomes.
 
 ---
 

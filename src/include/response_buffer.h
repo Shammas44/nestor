@@ -5,6 +5,13 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+typedef struct ResponseHeaderNode ResponseHeaderNode;
+struct ResponseHeaderNode {
+  char *name;
+  char *value;
+  ResponseHeaderNode *next;
+};
+
 typedef struct {
   Arena *arena;
   char *buf;
@@ -14,6 +21,7 @@ typedef struct {
   char expires[128];
   char etag[128];
   char last_modified[128];
+  ResponseHeaderNode *headers_head;
   bool is_stream;
   char stream_file_path[256];
   int stream_fd;

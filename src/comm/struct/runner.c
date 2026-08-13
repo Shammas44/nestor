@@ -1265,8 +1265,21 @@ int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJ
   Jsonv_Obj *outcome_obj = jsonv_obj_new(jsonv_arena, NULL);
   char *k_status_code = allocate_jsonv_string(arena, "status_code", 11);
   char *k_body = allocate_jsonv_string(arena, "body", 4);
+  char *k_headers = allocate_jsonv_string(arena, "headers", 7);
+  
+  Jsonv_Obj *headers_obj = jsonv_obj_new(jsonv_arena, NULL);
+  ResponseHeaderNode *curr_h = aj->resp_buf.headers_head;
+  while (curr_h) {
+    char *k_name = allocate_jsonv_string(arena, curr_h->name, strlen(curr_h->name));
+    char *v_val = allocate_jsonv_string(arena, curr_h->value, strlen(curr_h->value));
+    jsonv_obj_set(jsonv_arena, headers_obj, k_name, jsonv_val_str(v_val));
+    curr_h = curr_h->next;
+  }
+
   jsonv_obj_set(jsonv_arena, outcome_obj, k_status_code, jsonv_val_int(status_code));
   jsonv_obj_set(jsonv_arena, outcome_obj, k_body, body_val);
+  jsonv_obj_set(jsonv_arena, outcome_obj, k_headers, jsonv_val_obj(headers_obj));
+
   if (aj->resp_buf.is_stream) {
     char *k_stream = allocate_jsonv_string(arena, "stream", 6);
     jsonv_obj_set(jsonv_arena, outcome_obj, k_stream, stream_val);
@@ -1680,11 +1693,13 @@ int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *
               Jsonv_Value v_url = jsonv_val_undefined();
               Jsonv_Value v_headers = jsonv_val_undefined();
               Jsonv_Value v_body = jsonv_val_undefined();
+              Jsonv_Value v_insecure = jsonv_val_undefined();
               if (resolved_op_args.tag == JSONV_VAL_OBJ) {
                 jsonv_obj_get(resolved_op_args.as.p, "method", &v_method);
                 jsonv_obj_get(resolved_op_args.as.p, "url", &v_url);
                 jsonv_obj_get(resolved_op_args.as.p, "headers", &v_headers);
                 jsonv_obj_get(resolved_op_args.as.p, "body", &v_body);
+                jsonv_obj_get(resolved_op_args.as.p, "insecure", &v_insecure);
               }
 
               if (v_method.tag == JSONV_VAL_STRING) {
@@ -1700,6 +1715,16 @@ int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *
               }
               temp_step.http.headers = v_headers;
               temp_step.http.body = v_body;
+
+              temp_step.http.insecure = false;
+              if (v_insecure.tag == JSONV_VAL_BOOLEAN) {
+                temp_step.http.insecure = v_insecure.as.boolean;
+              } else if (resolved_config.tag == JSONV_VAL_OBJ) {
+                Jsonv_Value p_insecure = jsonv_val_undefined();
+                if (jsonv_obj_get(resolved_config.as.p, "insecure", &p_insecure) && p_insecure.tag == JSONV_VAL_BOOLEAN) {
+                  temp_step.http.insecure = p_insecure.as.boolean;
+                }
+              }
 
               int32_t status = transport->ops->start_request(transport, effective_arena, jsonv_arena, *context_val, &temp_step, &aj->resp_buf, &aj->easy_handle);
               if (status != ERR_SUCCESS) {

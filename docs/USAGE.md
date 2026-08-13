@@ -340,9 +340,14 @@ Under `"type": "task"` jobs, you declare an array of steps. There are two primar
 
 ### 4.1 HTTP Steps
 Performs non-blocking HTTP requests using `curl_multi`.
-*   **Properties**: `method`, `url`, `headers`, `body`, `timeout`, `stream`, `chunk_size`
+*   **Properties**: `method`, `url`, `headers`, `body`, `timeout`, `stream`, `chunk_size`, `insecure`
     *   **`stream`**: A boolean flag (`true`/`false`). When enabled, the HTTP response payload is streamed directly to a temporary file on disk (`.nestor_stream_<step_id>.json`) in chunked blocks of memory to prevent storing large DOMs in RAM.
     *   **`chunk_size`**: The buffer size in bytes for reading stream data blocks (default is `65536` bytes).
+    *   **`insecure`**: A boolean flag (`true`/`false`). When set to `true`, SSL certificate verification (host and peer verify) is bypassed for the connection.
+*   **Response Outcomes**: HTTP steps publish outcomes to the step context containing:
+    *   `status_code` (number): The HTTP response status code.
+    *   `body` (object/string): The parsed response body.
+    *   `headers` (object): A key-value mapping of all response headers.
 *   **Retries & Backoff**: Optional automatic retries with backoff delays.
 
 ```json
@@ -359,7 +364,8 @@ Performs non-blocking HTTP requests using `curl_multi`.
     },
     "timeout": "5s",
     "retries": 3,
-    "backoff_factor": 2
+    "backoff_factor": 2,
+    "insecure": true
   }
 }
 ```
@@ -442,7 +448,7 @@ To foster reusability and modularity, steps can recursively invoke another workf
 
 Global provider configurations centralize settings (TCP/TLS session pools, database pools, credentials, and api keys) at the workflow level. 
 
-Resolved configurations are automatically injected into the execution context under the `providers.<provider_id>` key, making them accessible to step outcome projections, variables, or dynamic plugins via `host_api->get_variable`.
+Resolved configurations are automatically injected into the execution context under the `providers.<provider_id>` key. If `insecure` is set to `true` at the provider level, all nested HTTP operations targeting that provider will bypass SSL verification automatically.
 
 ```json
 {
@@ -450,9 +456,9 @@ Resolved configurations are automatically injected into the execution context un
   "name": "My Orchestration Scenario",
   "on": { "manual": {} },
   "providers": {
-    "postgres": {
-      "connection_string": "postgresql://user:pass@host:5432/db",
-      "max_connections": 5
+    "my_insecure_api": {
+      "connection_string": "https://insecure-api.com",
+      "insecure": true
     }
   },
   "jobs": {
@@ -460,18 +466,17 @@ Resolved configurations are automatically injected into the execution context un
       "type": "task",
       "variables": [
         {
-          "name": "db_conn",
-          "expression": "providers.postgres.connection_string",
+          "name": "api_conn",
+          "expression": "providers.my_insecure_api.connection_string",
           "visibility": "public"
         }
       ],
       "steps": [
         {
-          "id": "insert_row",
-          "provider": "postgres.insert",
+          "id": "query_records",
+          "provider": "my_insecure_api.fetch",
           "args": {
-            "table": "users",
-            "record": { "id": 1, "name": "Alice" }
+            "query": "all"
           }
         }
       ]

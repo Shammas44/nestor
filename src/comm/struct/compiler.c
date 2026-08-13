@@ -313,6 +313,11 @@ static int32_t compile_step(Arena *arena, Jsonv_Value step_val, StepNode **out_s
     if (jsonv_obj_get(step_http.as.p, "stream", &v_stream) && v_stream.tag == JSONV_VAL_BOOLEAN) {
       step->http.stream = v_stream.as.boolean;
     }
+    Jsonv_Value v_insecure;
+    step->http.insecure = false;
+    if (jsonv_obj_get(step_http.as.p, "insecure", &v_insecure) && v_insecure.tag == JSONV_VAL_BOOLEAN) {
+      step->http.insecure = v_insecure.as.boolean;
+    }
     Jsonv_Value v_chunk_size;
     step->http.chunk_size = 0;
     if (jsonv_obj_get(step_http.as.p, "chunk_size", &v_chunk_size)) {

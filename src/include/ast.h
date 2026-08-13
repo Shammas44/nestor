@@ -72,6 +72,7 @@ struct StepNode {
     StringView mtls_profile;
     bool stream;
     int chunk_size;
+    bool insecure;
   } http;
 
   struct {

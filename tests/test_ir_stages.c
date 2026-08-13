@@ -705,6 +705,114 @@ Test(ir_stage16_5, declarative_yaml_providers) {
   rmdir("./providers");
 }
 
+Test(test_ir_new_features, insecure_ssl_option) {
+  /*#region*/
+  Arena *arena = arena_create(128 * 1024);
+  cr_assert_not_null(arena);
+
+  const char *wf_yaml =
+      "version: 2.0.0\n"
+      "name: insecure_wf\n"
+      "on: { manual: {} }\n"
+      "providers:\n"
+      "  my_prov:\n"
+      "    url: https://insecure.com\n"
+      "    insecure: true\n"
+      "jobs:\n"
+      "  job1:\n"
+      "    type: task\n"
+      "    steps:\n"
+      "      - id: step1\n"
+      "        http:\n"
+      "          method: GET\n"
+      "          url: https://insecure.com\n"
+      "          insecure: true\n";
+
+  WorkflowAST ast;
+  memset(&ast, 0, sizeof(WorkflowAST));
+  int32_t parse_res = parser_parse_buffer(arena, wf_yaml, strlen(wf_yaml), &ast);
+  cr_assert_eq(parse_res, ERR_SUCCESS);
+
+  int32_t comp_res = compile_workflow(arena, &ast);
+  cr_assert_eq(comp_res, ERR_SUCCESS);
+
+  // Assert step1 has insecure = true
+  cr_assert_not_null(ast.jobs_head);
+  cr_assert_eq(ast.jobs_head->type, NODE_TASK);
+  StepNode *step = ast.jobs_head->spec.task.steps_head;
+  cr_assert_not_null(step);
+  cr_assert(step->http.insecure, "HTTP step insecure flag must be compiled to true");
+
+  arena_destroy(arena);
+  /*#endregion*/
+}
+
+Test(test_ir_new_features, headers_response_retrieval) {
+  /*#region*/
+  Arena *arena = arena_create(256 * 1024);
+  cr_assert_not_null(arena);
+
+  transport_mock_clear();
+  transport_mock_add_response("http://example.com/api", "GET", 200, "{\"ok\": true}");
+  transport_mock_add_header("http://example.com/api", "GET", "X-Custom-Header", "nestor-test");
+  transport_mock_add_header("http://example.com/api", "GET", "Content-Type", "application/json");
+
+  const char *wf_yaml =
+      "version: 2.0.0\n"
+      "name: headers_wf\n"
+      "on: { manual: {} }\n"
+      "jobs:\n"
+      "  job1:\n"
+      "    type: task\n"
+      "    steps:\n"
+      "      - id: step_one\n"
+      "        http:\n"
+      "          method: GET\n"
+      "          url: http://example.com/api\n";
+
+  WorkflowAST ast;
+  memset(&ast, 0, sizeof(WorkflowAST));
+  int32_t parse_res = parser_parse_buffer(arena, wf_yaml, strlen(wf_yaml), &ast);
+  cr_assert_eq(parse_res, ERR_SUCCESS);
+
+  int32_t comp_res = compile_workflow(arena, &ast);
+  cr_assert_eq(comp_res, ERR_SUCCESS);
+
+  Jsonv_Arena *jarena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jarena, NULL);
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  Transport *transport = transport_mock_new(arena);
+  cr_assert_not_null(transport);
+
+  int32_t run_res = run_workflow_opt(arena, &ast, &context_val, transport);
+  cr_assert_eq(run_res, ERR_SUCCESS);
+
+  // Assert headers are in outcomes
+  Jsonv_Value jobs_obj;
+  cr_assert(jsonv_obj_get(root_obj, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value job1_obj;
+  cr_assert(jsonv_obj_get(jobs_obj.as.p, "job1", &job1_obj) && job1_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value steps_obj;
+  cr_assert(jsonv_obj_get(job1_obj.as.p, "steps", &steps_obj) && steps_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value step_one_obj;
+  cr_assert(jsonv_obj_get(steps_obj.as.p, "step_one", &step_one_obj) && step_one_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value headers_val;
+  cr_assert(jsonv_obj_get(step_one_obj.as.p, "headers", &headers_val) && headers_val.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value custom_h;
+  cr_assert(jsonv_obj_get(headers_val.as.p, "X-Custom-Header", &custom_h) && custom_h.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq(custom_h.as.p, "nestor-test");
+
+  transport->ops->destroy(transport);
+  arena_destroy(arena);
+  /*#endregion*/
+}
+
 
 
 
