@@ -1128,6 +1128,60 @@ int32_t start_loop_iteration(Arena *arena, Jsonv_Arena *jsonv_arena, Jsonv_Value
 
 static void save_step_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob *aj, StepNode *step, Jsonv_Obj *outcome_obj) {
   /*#region*/
+  if (step->provider_outputs_head) {
+    Arena *temp_arena = arena_create(256 * 1024);
+    if (temp_arena) {
+      Jsonv_Arena *temp_jsonv_arena = jsonv_arena_new_custom(&my_jsonv_ops, temp_arena);
+      if (temp_jsonv_arena) {
+        Jsonv_Obj *projected_outputs = jsonv_obj_new(temp_jsonv_arena, NULL);
+        Jsonv_Value context_val = jsonv_val_obj(outcome_obj);
+
+        VariableAST *curr = step->provider_outputs_head;
+        while (curr) {
+          Jsonv_Value val = jsonv_val_undefined();
+          int32_t status = evaluate_expression(temp_arena, curr->expression, temp_jsonv_arena, context_val, &val);
+          char *name_cstr = allocate_jsonv_string(temp_arena, curr->name.data, curr->name.length);
+          if (status == ERR_SUCCESS) {
+            jsonv_obj_set(temp_jsonv_arena, projected_outputs, name_cstr, val);
+          } else {
+            jsonv_obj_set(temp_jsonv_arena, projected_outputs, name_cstr, jsonv_val_null());
+          }
+          curr = curr->next;
+        }
+
+        int sz = jsonv_serialize(jsonv_val_obj(projected_outputs), NULL, 0);
+        if (sz >= 0) {
+          char *serialized_buf = na_alloc(arena, sz + 1);
+          if (serialized_buf) {
+            jsonv_serialize(jsonv_val_obj(projected_outputs), serialized_buf, sz + 1);
+
+            arena_destroy(temp_arena);
+            temp_arena = NULL;
+
+            Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+            if (temp_ctx) {
+              if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)serialized_buf)) {
+                Jsonv_Value main_projected_val;
+                jsonv_ctx_get_value(temp_ctx, &main_projected_val);
+
+                char *k_outputs = allocate_jsonv_string(arena, "outputs", 7);
+                jsonv_obj_set(jsonv_arena, outcome_obj, k_outputs, main_projected_val);
+
+                char *k_body = allocate_jsonv_string(arena, "body", 4);
+                char *k_stderr = allocate_jsonv_string(arena, "stderr", 6);
+                jsonv_obj_set(jsonv_arena, outcome_obj, k_body, jsonv_val_null());
+                jsonv_obj_set(jsonv_arena, outcome_obj, k_stderr, jsonv_val_null());
+              }
+            }
+          }
+        }
+      }
+      if (temp_arena) {
+        arena_destroy(temp_arena);
+      }
+    }
+  }
+
   if (step->outputs_head) {
     Arena *temp_arena = arena_create(256 * 1024);
     if (temp_arena) {
@@ -1679,11 +1733,12 @@ int32_t advance_active_job(Arena *arena, Jsonv_Arena *jsonv_arena, WorkflowAST *
 
             Jsonv_Value v_outputs;
             if (jsonv_obj_get(op_val.as.p, "outputs", &v_outputs) && v_outputs.tag == JSONV_VAL_OBJ) {
-              if (!step->outputs_head) {
-                build_outputs_ast(arena, v_outputs, &step->outputs_head);
+              if (!step->provider_outputs_head) {
+                build_outputs_ast(arena, v_outputs, &step->provider_outputs_head);
               }
-              temp_step.outputs_head = step->outputs_head;
+              temp_step.provider_outputs_head = step->provider_outputs_head;
             }
+            temp_step.outputs_head = step->outputs_head;
 
             char *uses_str = sv_to_cstring(arena, (StringView){v_uses.as.p, jsonv_val_str_len(v_uses)});
             if (strcmp(uses_str, "http") == 0) {

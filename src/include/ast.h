@@ -56,6 +56,7 @@ struct StepNode {
   StringView schema_sample;
   VariableAST *variables_head;
   VariableAST *outputs_head;
+  VariableAST *provider_outputs_head;
   bool is_http; // true for http, false for plugin/uses
   bool is_provider;
   bool is_resource;
