@@ -243,8 +243,12 @@ int32_t execute_step(Arena *arena, StepNode *step, Jsonv_Arena *jsonv_arena, Jso
     if (resp_buf.len > 0) {
       Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
       if (temp_ctx) {
-        if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)resp_buf.buf) ||
-            jsonv_ctx_parse_yaml_data(temp_ctx, (const unsigned char *)resp_buf.buf)) {
+        const unsigned char *buf_ptr = (const unsigned char *)resp_buf.buf;
+        if (resp_buf.len >= 3 && buf_ptr[0] == 0xEF && buf_ptr[1] == 0xBB && buf_ptr[2] == 0xBF) {
+          buf_ptr += 3;
+        }
+        if (jsonv_ctx_parse_data(temp_ctx, buf_ptr) ||
+            jsonv_ctx_parse_yaml_data(temp_ctx, buf_ptr)) {
           jsonv_ctx_get_value(temp_ctx, &body_val);
         } else {
           char *str = allocate_jsonv_string(arena, resp_buf.buf, resp_buf.len);
@@ -1301,8 +1305,12 @@ int32_t complete_http_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJ
 
     Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, &config, NULL);
     if (temp_ctx) {
-      if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)aj->resp_buf.buf) ||
-          jsonv_ctx_parse_yaml_data(temp_ctx, (const unsigned char *)aj->resp_buf.buf)) {
+      const unsigned char *buf_ptr = (const unsigned char *)aj->resp_buf.buf;
+      if (aj->resp_buf.len >= 3 && buf_ptr[0] == 0xEF && buf_ptr[1] == 0xBB && buf_ptr[2] == 0xBF) {
+        buf_ptr += 3;
+      }
+      if (jsonv_ctx_parse_data(temp_ctx, buf_ptr) ||
+          jsonv_ctx_parse_yaml_data(temp_ctx, buf_ptr)) {
         jsonv_ctx_get_value(temp_ctx, &body_val);
       } else {
         char *str = allocate_jsonv_string(arena, aj->resp_buf.buf, aj->resp_buf.len);
