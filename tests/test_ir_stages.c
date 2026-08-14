@@ -828,6 +828,101 @@ Test(test_ir_new_features, headers_response_retrieval) {
   /*#endregion*/
 }
 
+Test(test_ir_new_features, declarative_http_provider_outputs) {
+  /*#region*/
+  system("mkdir -p ./providers");
+  FILE *f = fopen("./providers/test_dec_http.yaml", "w");
+  cr_assert_not_null(f);
+  const char *prov_yaml =
+      "provider: test_dec_http\n"
+      "description: HTTP provider with outputs\n"
+      "configuration:\n"
+      "  api_url: \"http://example.com/api\"\n"
+      "operations:\n"
+      "  get_user:\n"
+      "    uses: http\n"
+      "    args:\n"
+      "      method: GET\n"
+      "      url: \"${{ configuration.api_url }}/user\"\n"
+      "    outputs:\n"
+      "      user_id: \"body.id\"\n"
+      "      auth_token: \"headers.X-token\"\n";
+  fputs(prov_yaml, f);
+  fclose(f);
+
+  Arena *arena = arena_create(256 * 1024);
+  cr_assert_not_null(arena);
+
+  transport_mock_clear();
+  transport_mock_add_response("http://example.com/api/user", "GET", 200, "{\"id\": \"usr_999\"}");
+  transport_mock_add_header("http://example.com/api/user", "GET", "X-token", "tkn_12345");
+
+  const char *yaml =
+      "version: \"2.0.0\"\n"
+      "name: dec_http_wf\n"
+      "on: { manual: {} }\n"
+      "providers:\n"
+      "  test_dec_http:\n"
+      "    api_url: \"http://example.com/api\"\n"
+      "jobs:\n"
+      "  job1:\n"
+      "    type: task\n"
+      "    steps:\n"
+      "      - id: get_profile\n"
+      "        provider: test_dec_http.get_user\n";
+
+  WorkflowAST ast;
+  memset(&ast, 0, sizeof(WorkflowAST));
+  int32_t parse_res = parser_parse_buffer(arena, yaml, strlen(yaml), &ast);
+  cr_assert_eq(parse_res, ERR_SUCCESS);
+
+  int32_t compile_res = compile_workflow(arena, &ast);
+  cr_assert_eq(compile_res, ERR_SUCCESS);
+
+  Jsonv_Arena *jarena = jsonv_ctx_arena(ast.jsonv_ctx);
+  Jsonv_Obj *root_obj = jsonv_obj_new(jarena, NULL);
+  Jsonv_Value context_val = jsonv_val_obj(root_obj);
+
+  Transport *transport = transport_mock_new(arena);
+  cr_assert_not_null(transport);
+
+  int32_t run_res = run_workflow_opt(arena, &ast, &context_val, transport);
+  cr_assert_eq(run_res, ERR_SUCCESS);
+
+  // Assert step outcome
+  Jsonv_Value jobs_obj;
+  cr_assert(jsonv_obj_get(root_obj, "jobs", &jobs_obj) && jobs_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value job1_obj;
+  cr_assert(jsonv_obj_get(jobs_obj.as.p, "job1", &job1_obj) && job1_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value steps_obj;
+  cr_assert(jsonv_obj_get(job1_obj.as.p, "steps", &steps_obj) && steps_obj.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value get_profile_obj;
+  cr_assert(jsonv_obj_get(steps_obj.as.p, "get_profile", &get_profile_obj) && get_profile_obj.tag == JSONV_VAL_OBJ);
+
+  // Assert step outputs contain user_id and auth_token from provider mapping
+  Jsonv_Value outputs_val;
+  cr_assert(jsonv_obj_get(get_profile_obj.as.p, "outputs", &outputs_val) && outputs_val.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value user_id_val;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "user_id", &user_id_val) && user_id_val.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq(user_id_val.as.p, "usr_999");
+
+  Jsonv_Value auth_token_val;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "auth_token", &auth_token_val) && auth_token_val.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq(auth_token_val.as.p, "tkn_12345");
+
+  transport->ops->destroy(transport);
+  arena_destroy(arena);
+
+  // Cleanup files
+  unlink("./providers/test_dec_http.yaml");
+  rmdir("./providers");
+  /*#endregion*/
+}
+
 
 
 
