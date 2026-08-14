@@ -241,7 +241,15 @@ int32_t execute_step(Arena *arena, StepNode *step, Jsonv_Arena *jsonv_arena, Jso
     // 7. Parse response body into Jsonv_Value
     Jsonv_Value body_val = jsonv_val_undefined();
     if (resp_buf.len > 0) {
-      Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+      Jsonv_Config config = {0};
+      config.default_block_size = 4096;
+      config.max_limit = 16 * 1024 * 1024;
+      config.max_depth = 128;
+      config.max_values = 100000;
+      config.max_objects = 50000;
+      config.max_array = 50000;
+      config.max_string_bytes = 4 * 1024 * 1024;
+      Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, &config, NULL);
       if (temp_ctx) {
         const unsigned char *buf_ptr = (const unsigned char *)resp_buf.buf;
         if (resp_buf.len >= 3 && buf_ptr[0] == 0xEF && buf_ptr[1] == 0xBB && buf_ptr[2] == 0xBF) {
@@ -429,7 +437,15 @@ int32_t execute_step(Arena *arena, StepNode *step, Jsonv_Arena *jsonv_arena, Jso
 
       Jsonv_Value body_val = jsonv_val_undefined();
       if (resp_buf.len > 0) {
-        Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+        Jsonv_Config config = {0};
+        config.default_block_size = 4096;
+        config.max_limit = 16 * 1024 * 1024;
+        config.max_depth = 128;
+        config.max_values = 100000;
+        config.max_objects = 50000;
+        config.max_array = 50000;
+        config.max_string_bytes = 4 * 1024 * 1024;
+        Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, &config, NULL);
         if (temp_ctx) {
           if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)resp_buf.buf) ||
               jsonv_ctx_parse_yaml_data(temp_ctx, (const unsigned char *)resp_buf.buf)) {
@@ -1162,7 +1178,15 @@ static void save_step_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob 
             arena_destroy(temp_arena);
             temp_arena = NULL;
 
-            Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+            Jsonv_Config config = {0};
+            config.default_block_size = 4096;
+            config.max_limit = 16 * 1024 * 1024;
+            config.max_depth = 128;
+            config.max_values = 100000;
+            config.max_objects = 50000;
+            config.max_array = 50000;
+            config.max_string_bytes = 4 * 1024 * 1024;
+            Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, &config, NULL);
             if (temp_ctx) {
               if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)serialized_buf)) {
                 Jsonv_Value main_projected_val;
@@ -1216,7 +1240,15 @@ static void save_step_outcome(Arena *arena, Jsonv_Arena *jsonv_arena, ActiveJob 
             arena_destroy(temp_arena);
             temp_arena = NULL;
 
-            Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+            Jsonv_Config config = {0};
+            config.default_block_size = 4096;
+            config.max_limit = 16 * 1024 * 1024;
+            config.max_depth = 128;
+            config.max_values = 100000;
+            config.max_objects = 50000;
+            config.max_array = 50000;
+            config.max_string_bytes = 4 * 1024 * 1024;
+            Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, &config, NULL);
             if (temp_ctx) {
               if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)serialized_buf)) {
                 Jsonv_Value main_projected_val;
@@ -1551,7 +1583,15 @@ int32_t complete_plugin_step_async(Arena *arena, Jsonv_Arena *jsonv_arena, Activ
   bool has_outputs = false;
 
   if (aj->plugin_exec.child_resp_buf.len > 0) {
-    Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, NULL, NULL);
+    Jsonv_Config config = {0};
+    config.default_block_size = 4096;
+    config.max_limit = 16 * 1024 * 1024;
+    config.max_depth = 128;
+    config.max_values = 100000;
+    config.max_objects = 50000;
+    config.max_array = 50000;
+    config.max_string_bytes = 4 * 1024 * 1024;
+    Jsonv_Context *temp_ctx = jsonv_ctx_new(jsonv_arena, &config, NULL);
     if (temp_ctx) {
       if (jsonv_ctx_parse_data(temp_ctx, (const unsigned char *)aj->plugin_exec.child_resp_buf.buf) ||
           jsonv_ctx_parse_yaml_data(temp_ctx, (const unsigned char *)aj->plugin_exec.child_resp_buf.buf)) {
