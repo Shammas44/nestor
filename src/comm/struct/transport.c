@@ -279,6 +279,7 @@ static int32_t curl_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
 
   resp_buf->arena = arena;
   resp_buf->len = 0;
+  resp_buf->headers_head = NULL;
   resp_buf->is_stream = step->http.stream;
   if (resp_buf->is_stream) {
     resp_buf->cap = 0;
@@ -533,6 +534,7 @@ static int32_t mock_start_request(Transport *t, Arena *arena, Jsonv_Arena *jsonv
     resp_buf->etag[sizeof(resp_buf->etag) - 1] = '\0';
     strncpy(resp_buf->last_modified, match->last_modified, sizeof(resp_buf->last_modified) - 1);
     resp_buf->last_modified[sizeof(resp_buf->last_modified) - 1] = '\0';
+    resp_buf->headers_head = NULL;
 
     MockHeaderNode *hcurr = match->headers_head;
     while (hcurr) {
