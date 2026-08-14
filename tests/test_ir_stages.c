@@ -768,7 +768,10 @@ Test(test_ir_new_features, headers_response_retrieval) {
       "      - id: step_one\n"
       "        http:\n"
       "          method: GET\n"
-      "          url: http://example.com/api\n";
+      "          url: http://example.com/api\n"
+      "        outputs:\n"
+      "          token: \"headers.X-Custom-Header\"\n"
+      "          content_type: \"headers.Content-Type\"\n";
 
   WorkflowAST ast;
   memset(&ast, 0, sizeof(WorkflowAST));
@@ -807,6 +810,18 @@ Test(test_ir_new_features, headers_response_retrieval) {
   Jsonv_Value custom_h;
   cr_assert(jsonv_obj_get(headers_val.as.p, "X-Custom-Header", &custom_h) && custom_h.tag == JSONV_VAL_STRING);
   cr_assert_str_eq(custom_h.as.p, "nestor-test");
+
+  // Assert outputs are correctly projected
+  Jsonv_Value outputs_val;
+  cr_assert(jsonv_obj_get(step_one_obj.as.p, "outputs", &outputs_val) && outputs_val.tag == JSONV_VAL_OBJ);
+
+  Jsonv_Value token_val;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "token", &token_val) && token_val.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq(token_val.as.p, "nestor-test");
+
+  Jsonv_Value ct_val;
+  cr_assert(jsonv_obj_get(outputs_val.as.p, "content_type", &ct_val) && ct_val.tag == JSONV_VAL_STRING);
+  cr_assert_str_eq(ct_val.as.p, "application/json");
 
   transport->ops->destroy(transport);
   arena_destroy(arena);

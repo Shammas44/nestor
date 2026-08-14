@@ -604,6 +604,63 @@ Jsonata_Arena *nestor_jsonata_arena_new(Arena *arena) {
   /*#endregion*/
 }
 
+static StringView preprocess_expression(Arena *arena, StringView expr) {
+  /*#region*/
+  char *buf = na_alloc(arena, expr.length * 2 + 16);
+  if (!buf) return expr;
+
+  size_t src_idx = 0;
+  size_t dst_idx = 0;
+
+  while (src_idx < expr.length) {
+    if (src_idx + 8 <= expr.length && strncmp(expr.data + src_idx, "headers.", 8) == 0) {
+      memcpy(buf + dst_idx, "headers.", 8);
+      dst_idx += 8;
+      src_idx += 8;
+
+      if (src_idx < expr.length && (expr.data[src_idx] == '`' || expr.data[src_idx] == '"' || expr.data[src_idx] == '\'')) {
+        continue;
+      }
+
+      size_t id_start = src_idx;
+      while (src_idx < expr.length && 
+             ((expr.data[src_idx] >= 'a' && expr.data[src_idx] <= 'z') ||
+              (expr.data[src_idx] >= 'A' && expr.data[src_idx] <= 'Z') ||
+              (expr.data[src_idx] >= '0' && expr.data[src_idx] <= '9') ||
+              expr.data[src_idx] == '_' || expr.data[src_idx] == '-')) {
+        src_idx++;
+      }
+      size_t id_len = src_idx - id_start;
+
+      if (id_len > 0) {
+        bool has_hyphen = false;
+        for (size_t k = 0; k < id_len; k++) {
+          if (expr.data[id_start + k] == '-') {
+            has_hyphen = true;
+            break;
+          }
+        }
+
+        if (has_hyphen) {
+          buf[dst_idx++] = '"';
+          memcpy(buf + dst_idx, expr.data + id_start, id_len);
+          dst_idx += id_len;
+          buf[dst_idx++] = '"';
+        } else {
+          memcpy(buf + dst_idx, expr.data + id_start, id_len);
+          dst_idx += id_len;
+        }
+      }
+    } else {
+      buf[dst_idx++] = expr.data[src_idx++];
+    }
+  }
+
+  buf[dst_idx] = '\0';
+  return (StringView){buf, dst_idx};
+  /*#endregion*/
+}
+
 int32_t evaluate_expression(Arena *arena, StringView expr, Jsonv_Arena *jsonv_arena, Jsonv_Value context_val, Jsonv_Value *out_val) {
   /*#region*/
   if (!arena || !jsonv_arena || !out_val)
@@ -634,6 +691,9 @@ int32_t evaluate_expression(Arena *arena, StringView expr, Jsonv_Arena *jsonv_ar
     raw_expr.data += 3;
     raw_expr.length -= 5;
   }
+
+  // Preprocess headers containing hyphen '-'
+  raw_expr = preprocess_expression(arena, raw_expr);
 
   // Trim whitespace inside boundaries
   while (raw_expr.length > 0 && (raw_expr.data[0] == ' ' || raw_expr.data[0] == '\t' || raw_expr.data[0] == '\n' || raw_expr.data[0] == '\r')) {
